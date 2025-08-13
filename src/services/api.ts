@@ -1,6 +1,6 @@
 
 // const API_BASE_URL = import.meta.env.VITE_API_BASE_UR;
-const API_BASE_URL ="https://ragpdfsystem.azurewebsites.net"
+const API_BASE_URL ="https://ragpdfsystem.azurewebsites.net/"
 
 export interface Document {
   id: string;
