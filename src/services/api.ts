@@ -32,6 +32,7 @@ export interface ChatResponse {
   }>;
 }
 
+
 class ApiService {
   async uploadDocument(file: File): Promise<ProcessingJob> {
     const formData = new FormData();

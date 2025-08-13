@@ -15,7 +15,6 @@ const Layout = ({ children }: LayoutProps) => {
   
   const navigation = [
     { name: 'Chat', href: '/', icon: MessageSquare },
-    { name: 'Dashboard', href: '/dashboard', icon: Home },
     { name: 'Documents', href: '/documents', icon: FileText },
   ];
 
@@ -54,27 +53,6 @@ const Layout = ({ children }: LayoutProps) => {
               })}
             </nav>
           </ScrollArea>
-          <div className="p-4 border-t border-border">
-            <div className="flex items-center">
-              <div className="flex-shrink-0">
-                <div className="h-8 w-8 rounded-full bg-muted flex items-center justify-center">
-                  <User className="h-4 w-4 text-muted-foreground" />
-                </div>
-              </div>
-              <div className="ml-3">
-                <p className="text-sm font-medium">John Doe</p>
-                <p className="text-xs text-muted-foreground">Legal Counsel</p>
-              </div>
-              <div className="ml-auto flex items-center space-x-2">
-                <Button variant="ghost" size="icon" className="h-8 w-8">
-                  <Settings className="h-4 w-4" />
-                </Button>
-                <Button variant="ghost" size="icon" className="h-8 w-8">
-                  <LogOut className="h-4 w-4" />
-                </Button>
-              </div>
-            </div>
-          </div>
         </div>
       </div>
 
@@ -124,27 +102,6 @@ const Layout = ({ children }: LayoutProps) => {
                       })}
                     </nav>
                   </ScrollArea>
-                  <div className="p-4 border-t border-border">
-                    <div className="flex items-center">
-                      <div className="flex-shrink-0">
-                        <div className="h-8 w-8 rounded-full bg-muted flex items-center justify-center">
-                          <User className="h-4 w-4 text-muted-foreground" />
-                        </div>
-                      </div>
-                      <div className="ml-3">
-                        <p className="text-sm font-medium">John Doe</p>
-                        <p className="text-xs text-muted-foreground">Legal Counsel</p>
-                      </div>
-                      <div className="ml-auto flex items-center space-x-2">
-                        <Button variant="ghost" size="icon" className="h-8 w-8">
-                          <Settings className="h-4 w-4" />
-                        </Button>
-                        <Button variant="ghost" size="icon" className="h-8 w-8">
-                          <LogOut className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    </div>
-                  </div>
                 </div>
               </SheetContent>
             </Sheet>

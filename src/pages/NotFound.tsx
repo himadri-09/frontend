@@ -14,7 +14,7 @@ const NotFound = () => {
         <Button asChild className="bg-primary text-primary-foreground hover:bg-primary-800">
           <Link to="/">
             <Home className="mr-2 h-4 w-4" />
-            Return to Dashboard
+            ReDashboardturn to 
           </Link>
         </Button>
       </div>
