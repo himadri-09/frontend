@@ -1,128 +1,162 @@
-import { useState, useCallback } from 'react';
+// components/DocumentUpload.tsx
+import React, { useState, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
-import { Card } from '@/components/ui/card';
-import { Upload, X, FileText } from 'lucide-react';
+import { Input } from '@/components/ui/input';
+import { X, Upload, FileText } from 'lucide-react';
+import { useToast } from '@/components/ui/use-toast';
 
-interface DocumentUploadProps {
-  onUpload: (files: File[]) => void;
-  onCancel: () => void;
+// Define the props interface
+export interface DocumentUploadProps {
+  onUpload: (files: File[]) => Promise<void>;
+  onClose: () => void; // Add this prop
 }
 
-const DocumentUpload = ({ onUpload, onCancel }: DocumentUploadProps) => {
-  const [files, setFiles] = useState<File[]>([]);
-  const [isDragging, setIsDragging] = useState(false);
+const DocumentUpload: React.FC<DocumentUploadProps> = ({ onUpload, onClose }) => {
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const { toast } = useToast();
 
-  const handleDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragging(true);
-  }, []);
-
-  const handleDragLeave = useCallback((e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragging(false);
-  }, []);
-
-  const handleDrop = useCallback((e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragging(false);
+  const handleFileSelect = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files || []);
+    const pdfFiles = files.filter(file => file.type === 'application/pdf');
     
-    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      const newFiles = Array.from(e.dataTransfer.files);
-      setFiles(prev => [...prev, ...newFiles]);
+    if (pdfFiles.length !== files.length) {
+      toast({
+        title: "Invalid Files",
+        description: "Only PDF files are allowed",
+        variant: "destructive",
+      });
     }
-  }, []);
+    
+    setSelectedFiles(pdfFiles);
+  }, [toast]);
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files.length > 0) {
-      const newFiles = Array.from(e.target.files);
-      setFiles(prev => [...prev, ...newFiles]);
+  const handleDrop = useCallback((event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const files = Array.from(event.dataTransfer.files);
+    const pdfFiles = files.filter(file => file.type === 'application/pdf');
+    
+    if (pdfFiles.length !== files.length) {
+      toast({
+        title: "Invalid Files",
+        description: "Only PDF files are allowed",
+        variant: "destructive",
+      });
+    }
+    
+    setSelectedFiles(pdfFiles);
+  }, [toast]);
+
+  const handleDragOver = (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+  };
+
+  const handleUpload = async () => {
+    if (selectedFiles.length === 0) return;
+
+    setUploading(true);
+    try {
+      await onUpload(selectedFiles);
+      setSelectedFiles([]);
+    } catch (error) {
+      toast({
+        title: "Upload Failed",
+        description: "Failed to upload files",
+        variant: "destructive",
+      });
+    } finally {
+      setUploading(false);
     }
   };
 
   const removeFile = (index: number) => {
-    setFiles(prev => prev.filter((_, i) => i !== index));
-  };
-
-  const handleUpload = () => {
-    if (files.length > 0) {
-      onUpload(files);
-    }
+    setSelectedFiles(files => files.filter((_, i) => i !== index));
   };
 
   return (
-    <Card className="p-6">
-      <div
-        className={`upload-area ${isDragging ? 'border-primary' : ''}`}
-        onDragOver={handleDragOver}
-        onDragLeave={handleDragLeave}
-        onDrop={handleDrop}
-      >
-        <Upload className="h-12 w-12 text-muted-foreground group-hover:text-foreground transition-colors duration-200" />
-        <p className="mt-2 text-center">Drag and drop files here or click to browse</p>
-        <input
-          type="file"
-          id="file-upload"
-          className="hidden"
-          multiple
-          onChange={handleFileChange}
-          accept=".pdf,.doc,.docx,.txt"
-        />
-        <Button
-          onClick={() => document.getElementById('file-upload')?.click()}
-          className="upload-button mt-4"
-        >
-          Select Files
-        </Button>
-      </div>
-
-      {files.length > 0 && (
-        <div className="mt-6">
-          <h3 className="text-lg font-semibold mb-3">Selected Files</h3>
-          <div className="space-y-2">
-            {files.map((file, index) => (
-              <div key={index} className="flex items-center justify-between p-3 bg-muted rounded-md">
-                <div className="flex items-center">
-                  <FileText className="h-5 w-5 mr-2 text-muted-foreground" />
-                  <div>
-                    <p className="font-medium">{file.name}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {(file.size / 1024 / 1024).toFixed(2)} MB
-                    </p>
-                  </div>
-                </div>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => removeFile(index)}
-                  className="h-8 w-8 text-muted-foreground hover:text-error hover:bg-error-muted"
-                >
-                  <X className="h-4 w-4" />
-                </Button>
-              </div>
-            ))}
-          </div>
-
-          <div className="flex justify-end space-x-3 mt-4">
-            <Button
-              variant="outline"
-              onClick={onCancel}
-              className="bg-background text-foreground border-border hover:bg-muted"
-            >
-              Cancel
-            </Button>
-            <Button
-              onClick={handleUpload}
-              className="bg-primary text-primary-foreground hover:bg-primary-800"
-            >
-              Upload {files.length} {files.length === 1 ? 'File' : 'Files'}
-            </Button>
-          </div>
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+      <div className="bg-white rounded-lg p-6 w-full max-w-md mx-4">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-xl font-semibold">Upload Documents</h2>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onClose}
+            className="p-1"
+          >
+            <X className="h-4 w-4" />
+          </Button>
         </div>
-      )}
-    </Card>
+
+        {/* File Drop Zone */}
+        <div
+          onDrop={handleDrop}
+          onDragOver={handleDragOver}
+          className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center mb-4 hover:border-gray-400 transition-colors"
+        >
+          <Upload className="mx-auto h-12 w-12 text-gray-400 mb-4" />
+          <p className="text-gray-600 mb-2">Drag and drop PDF files here, or</p>
+          <Input
+            type="file"
+            accept=".pdf"
+            multiple
+            onChange={handleFileSelect}
+            className="hidden"
+            id="file-upload"
+          />
+          <Button
+            variant="outline"
+            onClick={() => document.getElementById('file-upload')?.click()}
+          >
+            Browse Files
+          </Button>
+        </div>
+
+        {/* Selected Files */}
+        {selectedFiles.length > 0 && (
+          <div className="mb-4">
+            <h3 className="font-medium mb-2">Selected Files:</h3>
+            <div className="space-y-2">
+              {selectedFiles.map((file, index) => (
+                <div key={index} className="flex items-center justify-between bg-gray-50 p-2 rounded">
+                  <div className="flex items-center">
+                    <FileText className="h-4 w-4 text-red-600 mr-2" />
+                    <span className="text-sm">{file.name}</span>
+                    <span className="text-xs text-gray-500 ml-2">
+                      ({(file.size / (1024 * 1024)).toFixed(1)} MB)
+                    </span>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => removeFile(index)}
+                    className="p-1"
+                  >
+                    <X className="h-3 w-3" />
+                  </Button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Actions */}
+        <div className="flex justify-end space-x-2">
+          <Button
+            variant="outline"
+            onClick={onClose}
+          >
+            Cancel
+          </Button>
+          <Button
+            onClick={handleUpload}
+            disabled={selectedFiles.length === 0 || uploading}
+          >
+            {uploading ? 'Uploading...' : `Upload ${selectedFiles.length} file${selectedFiles.length !== 1 ? 's' : ''}`}
+          </Button>
+        </div>
+      </div>
+    </div>
   );
 };
 
