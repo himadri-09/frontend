@@ -129,7 +129,7 @@ const Documents = () => {
           <h1 className="text-3xl font-bold">Documents</h1>
           <div className="flex gap-2">
             <Button
-              onClick={fetchDocuments} // Trigger the document refresh on click
+              onClick={fetchDocuments}
               variant="outline"
               size="sm"
             >
