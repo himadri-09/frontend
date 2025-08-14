@@ -1,7 +1,7 @@
 
 // const API_BASE_URL = import.meta.env.VITE_API_BASE_UR;
-const API_BASE_URL ="https://ragpdfsystem.azurewebsites.net/"
-
+// const API_BASE_URL ="https://ragpdfsystem.azurewebsites.net/"
+const API_BASE_URL="http://127.0.0.1:5000"
 export interface Document {
   id: string;
   name: string;
@@ -21,6 +21,9 @@ export interface ProcessingJob {
   stage?: string;
   elapsed_time?: number;
   chunk_count?: number;
+  pdf_name?: string;
+  file_name?: string;
+  file_size_mb?: number;
 }
 
 export interface ChatResponse {

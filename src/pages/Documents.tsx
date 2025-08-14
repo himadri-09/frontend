@@ -14,10 +14,56 @@ const Documents = () => {
   const [processingJobs, setProcessingJobs] = useState<Map<string, ProcessingJob>>(new Map());
   const { toast } = useToast();
 
-  const fetchDocuments = async () => {
+  // Helper function to get processing jobs from localStorage
+  const getStoredProcessingJobs = (): Map<string, ProcessingJob> => {
+    try {
+      const stored = localStorage.getItem('processingJobs');
+      if (stored) {
+        const jobsArray = JSON.parse(stored);
+        return new Map(jobsArray.map((job: ProcessingJob) => [job.job_id, job]));
+      }
+    } catch (error) {
+      console.error('Error loading stored jobs:', error);
+    }
+    return new Map();
+  };
+
+  // Helper function to save processing jobs to localStorage
+  const saveProcessingJobs = (jobs: Map<string, ProcessingJob>) => {
+    try {
+      const jobsArray = Array.from(jobs.values());
+      localStorage.setItem('processingJobs', JSON.stringify(jobsArray));
+    } catch (error) {
+      console.error('Error saving jobs:', error);
+    }
+  };
+
+  const fetchDocuments = async (showLoadingState = false) => {
+    if (showLoadingState) {
+      setLoading(true);
+    }
+    
     try {
       const docs = await apiService.getAllDocuments();
       setDocuments(docs);
+      
+      // Check if any previously processing jobs are now complete
+      const currentJobs = new Map(processingJobs);
+      let jobsUpdated = false;
+      
+      for (const [jobId, job] of currentJobs.entries()) {
+        const matchingDoc = docs.find(doc => doc.pdf_name === job.pdf_name);
+        if (matchingDoc && (matchingDoc.status === 'Analyzed' || matchingDoc.status === 'Failed')) {
+          // Job is complete, remove from processing
+          currentJobs.delete(jobId);
+          jobsUpdated = true;
+        }
+      }
+      
+      if (jobsUpdated) {
+        setProcessingJobs(currentJobs);
+        saveProcessingJobs(currentJobs);
+      }
     } catch (error) {
       toast({
         title: "Error",
@@ -25,18 +71,44 @@ const Documents = () => {
         variant: "destructive",
       });
     } finally {
-      setLoading(false);
+      if (showLoadingState) {
+        setLoading(false);
+      }
     }
   };
 
+  // Load processing jobs from localStorage on component mount
   useEffect(() => {
-    fetchDocuments();
+    const storedJobs = getStoredProcessingJobs();
+    setProcessingJobs(storedJobs);
+    
+    // Start polling for any stored jobs
+    storedJobs.forEach((job, jobId) => {
+      if (job.status !== 'completed' && job.status !== 'failed') {
+        pollJobStatus(jobId);
+      }
+    });
   }, []);
+
+  useEffect(() => {
+    fetchDocuments(true); // Show loading state on initial load
+  }, []);
+
+  // Auto-refresh documents every 30 seconds to sync with backend
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (!loading) {
+        fetchDocuments(false); // Don't show loading state for auto-refresh
+      }
+    }, 30000); // 30 seconds
+
+    return () => clearInterval(interval);
+  }, [loading, processingJobs]);
 
   const deleteDocument = async (id: string) => {
     try {
       await apiService.deleteDocument(id);
-      await fetchDocuments(); // Refresh the list
+      await fetchDocuments(false); // Don't show loading state for delete refresh
       toast({
         title: "Success",
         description: "Document deleted successfully",
@@ -55,8 +127,10 @@ const Documents = () => {
       try {
         const job = await apiService.uploadDocument(file);
         
-        // Add to processing jobs
-        setProcessingJobs(prev => new Map(prev.set(job.job_id, job)));
+        // Add to processing jobs (uploadDocument now includes pdf_name and file_name)
+        const newJobs = new Map(processingJobs.set(job.job_id, job));
+        setProcessingJobs(newJobs);
+        saveProcessingJobs(newJobs);
         
         // Poll for status updates
         pollJobStatus(job.job_id);
@@ -77,38 +151,101 @@ const Documents = () => {
   };
 
   const pollJobStatus = async (jobId: string) => {
+    let pollCount = 0;
+    const maxPolls = 300; // Maximum 10 minutes (300 * 2 seconds)
+    
     const pollInterval = setInterval(async () => {
+      pollCount++;
+      
       try {
         const status = await apiService.getJobStatus(jobId);
         
-        setProcessingJobs(prev => new Map(prev.set(jobId, status)));
+        // Update processing jobs
+        const newJobs = new Map(processingJobs.set(jobId, status));
+        setProcessingJobs(newJobs);
+        saveProcessingJobs(newJobs);
         
-        if (status.status === 'completed' || status.status === 'failed') {
+        if (status.status === 'completed' || status.status === 'failed' || pollCount >= maxPolls) {
           clearInterval(pollInterval);
-          setProcessingJobs(prev => {
-            const newMap = new Map(prev);
-            newMap.delete(jobId);
-            return newMap;
-          });
+          
+          // Remove from processing jobs after a delay to show completion
+          setTimeout(() => {
+            setProcessingJobs(prev => {
+              const updated = new Map(prev);
+              updated.delete(jobId);
+              saveProcessingJobs(updated);
+              return updated;
+            });
+          }, 3000);
           
           // Refresh documents list
-          await fetchDocuments();
+          await fetchDocuments(false); // Don't show loading state for job completion refresh
           
-          toast({
-            title: status.status === 'completed' ? "Processing Complete" : "Processing Failed",
-            description: status.message || status.error,
-            variant: status.status === 'completed' ? "default" : "destructive",
-          });
+          if (pollCount < maxPolls) {
+            toast({
+              title: status.status === 'completed' ? "Processing Complete" : "Processing Failed",
+              description: status.message || status.error || 
+                          `${status.pdf_name || 'Document'} ${status.status === 'completed' ? 'processed successfully' : 'processing failed'}`,
+              variant: status.status === 'completed' ? "default" : "destructive",
+            });
+          } else {
+            // Timeout case
+            toast({
+              title: "Processing Timeout",
+              description: "Processing is taking longer than expected. Please check back later.",
+              variant: "destructive",
+            });
+          }
         }
       } catch (error) {
-        clearInterval(pollInterval);
-        setProcessingJobs(prev => {
-          const newMap = new Map(prev);
-          newMap.delete(jobId);
-          return newMap;
-        });
+        console.error('Polling error:', error);
+        // Don't stop polling on network errors, just log them
+        // Only stop if we can't reach the server for too long
+        if (pollCount >= maxPolls) {
+          clearInterval(pollInterval);
+          setProcessingJobs(prev => {
+            const updated = new Map(prev);
+            updated.delete(jobId);
+            saveProcessingJobs(updated);
+            return updated;
+          });
+        }
       }
     }, 2000); // Poll every 2 seconds
+  };
+
+  // Get combined processing status for documents
+  const getDocumentStatus = (doc: Document) => {
+    // Check if there's an active processing job for this document
+    const activeJob = Array.from(processingJobs.values()).find(
+      job => job.pdf_name === doc.pdf_name || job.file_name === doc.name
+    );
+    
+    if (activeJob && (activeJob.status === 'pending' || activeJob.status === 'processing')) {
+      return {
+        status: 'Processing' as const,
+        stage: activeJob.stage || 'Processing...'
+      };
+    }
+    
+    // Return the document's actual status from backend
+    return {
+      status: doc.status,
+      stage: null
+    };
+  };
+
+  const getStatusColor = (status: string) => {
+    switch (status) {
+      case 'Analyzed':
+        return 'bg-green-100 text-green-800';
+      case 'Processing':
+        return 'bg-yellow-100 text-yellow-800';
+      case 'Failed':
+        return 'bg-red-100 text-red-800';
+      default:
+        return 'bg-gray-100 text-gray-800';
+    }
   };
 
   if (loading) {
@@ -129,11 +266,12 @@ const Documents = () => {
           <h1 className="text-3xl font-bold">Documents</h1>
           <div className="flex gap-2">
             <Button
-              onClick={fetchDocuments}
+              onClick={() => fetchDocuments(true)} // Show loading state when manually refreshed
               variant="outline"
               size="sm"
+              disabled={loading}
             >
-              <RefreshCw className="h-4 w-4 mr-2" />
+              <RefreshCw className={`h-4 w-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
               Refresh
             </Button>
             <Button
@@ -160,10 +298,24 @@ const Documents = () => {
             {Array.from(processingJobs.values()).map((job) => (
               <div key={job.job_id} className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
                 <div className="flex items-center justify-between mb-2">
-                  <span className="font-medium">Processing...</span>
-                  <span className="text-sm text-gray-600">{job.stage}</span>
+                  <span className="font-medium">
+                    {job.file_name || job.pdf_name || 'Processing...'}
+                  </span>
+                  <span className="text-sm text-gray-600">{job.stage || 'Processing...'}</span>
                 </div>
-                <Progress value={job.status === 'processing' ? 50 : 10} className="w-full" />
+                <Progress 
+                  value={
+                    job.status === 'processing' ? 50 : 
+                    job.status === 'pending' ? 10 : 
+                    job.status === 'completed' ? 100 : 25
+                  } 
+                  className="w-full" 
+                />
+                {job.elapsed_time && (
+                  <div className="text-xs text-gray-500 mt-1">
+                    Elapsed: {Math.round(job.elapsed_time)}s
+                  </div>
+                )}
               </div>
             ))}
           </div>
@@ -192,63 +344,66 @@ const Documents = () => {
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
-              {documents.map((doc) => (
-                <tr key={doc.id}>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <div className="flex items-center">
-                      <FileText className="h-5 w-5 text-gray-400 mr-3" />
-                      <span className="text-sm font-medium text-gray-900">{doc.name}</span>
-                    </div>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                    {doc.date}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                    {doc.size}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${
-                      doc.status === 'Analyzed'
-                        ? 'bg-green-100 text-green-800'
-                        : doc.status === 'Processing'
-                        ? 'bg-yellow-100 text-yellow-800'
-                        : 'bg-red-100 text-red-800'
-                    }`}>
-                      {doc.status}
-                    </span>
-                    {doc.chunk_count && (
-                      <div className="text-xs text-gray-500 mt-1">
-                        {doc.chunk_count} chunks
+              {documents.map((doc) => {
+                const { status, stage } = getDocumentStatus(doc);
+                return (
+                  <tr key={doc.id}>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <div className="flex items-center">
+                        <FileText className="h-5 w-5 text-gray-400 mr-3" />
+                        <span className="text-sm font-medium text-gray-900">{doc.name}</span>
                       </div>
-                    )}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                    <div className="flex items-center justify-end space-x-2">
-                      {doc.blob_url && (
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      {doc.date}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      {doc.size}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${getStatusColor(status)}`}>
+                        {status}
+                      </span>
+                      {stage && (
+                        <div className="text-xs text-gray-500 mt-1">
+                          {stage}
+                        </div>
+                      )}
+                      {doc.chunk_count && status === 'Analyzed' && (
+                        <div className="text-xs text-gray-500 mt-1">
+                          {doc.chunk_count} chunks
+                        </div>
+                      )}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                      <div className="flex items-center justify-end space-x-2">
+                        {doc.blob_url && status === 'Analyzed' && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => window.open(doc.blob_url, '_blank')}
+                          >
+                            <Eye className="h-4 w-4" />
+                          </Button>
+                        )}
                         <Button
                           variant="ghost"
                           size="sm"
-                          onClick={() => window.open(doc.blob_url, '_blank')}
+                          onClick={() => deleteDocument(doc.id)}
+                          className="text-red-600 hover:text-red-800"
+                          disabled={status === 'Processing'}
                         >
-                          <Eye className="h-4 w-4" />
+                          <Trash2 className="h-4 w-4" />
                         </Button>
-                      )}
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => deleteDocument(doc.id)}
-                        className="text-red-600 hover:text-red-800"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
           
-          {documents.length === 0 && (
+          {documents.length === 0 && processingJobs.size === 0 && (
             <div className="text-center py-8">
               <FileText className="mx-auto h-12 w-12 text-gray-400" />
               <h3 className="mt-2 text-sm font-medium text-gray-900">No documents</h3>
