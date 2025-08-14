@@ -94,21 +94,18 @@ const Documents = () => {
     fetchDocuments(true); // Show loading state on initial load
   }, []);
 
-  // Auto-refresh documents every 30 seconds to sync with backend
-  useEffect(() => {
-    const interval = setInterval(() => {
-      if (!loading) {
-        fetchDocuments(false); // Don't show loading state for auto-refresh
-      }
-    }, 30000); // 30 seconds
-
-    return () => clearInterval(interval);
-  }, [loading, processingJobs]);
+  // ❌ REMOVED: Auto-refresh every 30 seconds
+  // This was causing unnecessary backend calls
+  // Now documents are only refreshed when:
+  // 1. Component mounts
+  // 2. User clicks refresh button
+  // 3. After upload/delete operations
+  // 4. After processing job completes
 
   const deleteDocument = async (id: string) => {
     try {
       await apiService.deleteDocument(id);
-      await fetchDocuments(false); // Don't show loading state for delete refresh
+      await fetchDocuments(false); // Refresh only after successful delete
       toast({
         title: "Success",
         description: "Document deleted successfully",
@@ -178,8 +175,8 @@ const Documents = () => {
             });
           }, 3000);
           
-          // Refresh documents list
-          await fetchDocuments(false); // Don't show loading state for job completion refresh
+          // ✅ ONLY refresh documents when job actually completes
+          await fetchDocuments(false);
           
           if (pollCount < maxPolls) {
             toast({
@@ -266,7 +263,7 @@ const Documents = () => {
           <h1 className="text-3xl font-bold">Documents</h1>
           <div className="flex gap-2">
             <Button
-              onClick={() => fetchDocuments(true)} // Show loading state when manually refreshed
+              onClick={() => fetchDocuments(true)} // Manual refresh only
               variant="outline"
               size="sm"
               disabled={loading}
