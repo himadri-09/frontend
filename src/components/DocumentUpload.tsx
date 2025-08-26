@@ -52,13 +52,17 @@ const DocumentUpload: React.FC<DocumentUploadProps> = ({ onUpload, onClose }) =>
   };
 
   const handleUpload = async () => {
+    console.log('Upload started with files:', selectedFiles);
     if (selectedFiles.length === 0) return;
 
     setUploading(true);
     try {
+      console.log('Calling onUpload...');
       await onUpload(selectedFiles);
+      console.log('Upload successful');
       setSelectedFiles([]);
     } catch (error) {
+      console.error('Upload error:', error);
       toast({
         title: "Upload Failed",
         description: "Failed to upload files",

@@ -166,14 +166,12 @@ const Documents = () => {
           clearInterval(pollInterval);
           
           // Remove from processing jobs after a delay to show completion
-          setTimeout(() => {
             setProcessingJobs(prev => {
               const updated = new Map(prev);
               updated.delete(jobId);
               saveProcessingJobs(updated);
               return updated;
             });
-          }, 3000);
           
           // ✅ ONLY refresh documents when job actually completes
           await fetchDocuments(false);
