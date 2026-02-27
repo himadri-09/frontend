@@ -8,4 +8,7 @@ node_modules/
 dist/
 build/
 .backup/
-
+BACKEND_MIGRATION_GUIDE.md
+CHAT_INPUT_DISABLE_GUIDE.md
+MIGRATION_COMPLETE.md
+SUPABASE_AUTH_GUIDE.md
