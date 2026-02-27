@@ -3,7 +3,7 @@ import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import Layout from '@/components/Layout';
 import DocumentUpload from '@/components/DocumentUpload';
-import { FileText, Trash2, Eye, Clock, RefreshCw } from 'lucide-react';
+import { FileText, Trash2, Eye, RefreshCw } from 'lucide-react';
 import { apiService, Document, ProcessingJob } from '@/services/api';
 import { useToast } from '@/components/ui/use-toast';
 
@@ -122,20 +122,57 @@ const Documents = () => {
   const handleUpload = async (files: File[]) => {
     for (const file of files) {
       try {
-        const job = await apiService.uploadDocument(file);
-        
-        // Add to processing jobs (uploadDocument now includes pdf_name and file_name)
-        const newJobs = new Map(processingJobs.set(job.job_id, job));
-        setProcessingJobs(newJobs);
-        saveProcessingJobs(newJobs);
-        
-        // Poll for status updates
-        pollJobStatus(job.job_id);
-        
-        toast({
-          title: "Upload Started",
-          description: `Processing ${file.name}...`,
-        });
+        const response = await apiService.uploadDocument(file);
+
+        // Helper to get chunk count from either field name
+        const chunkCount = response.chunks_processed || response.chunk_count || 0;
+
+        // Check the status field to determine how to handle the response
+        if (response.status === 'already_exists') {
+          // Duplicate upload - this is now a SUCCESS case!
+          toast({
+            title: "PDF Already Exists",
+            description: `"${response.pdf_name}" is already indexed with ${chunkCount} chunks. Ready for queries!`,
+          });
+
+          // Refresh documents immediately to show the existing document
+          await fetchDocuments(false);
+
+        } else if (response.status === 'newly_processed') {
+          // Small file processed immediately
+          toast({
+            title: "Upload Complete",
+            description: `"${response.pdf_name}" processed successfully! ${chunkCount} chunks indexed.`,
+          });
+
+          // Refresh documents immediately
+          await fetchDocuments(false);
+
+        } else if (response.status === 'started') {
+          // Large file - needs background processing with polling
+          const newJobs = new Map(processingJobs.set(response.job_id, response));
+          setProcessingJobs(newJobs);
+          saveProcessingJobs(newJobs);
+
+          // Poll for status updates
+          pollJobStatus(response.job_id);
+
+          toast({
+            title: "Processing Started",
+            description: `Processing large file "${file.name}"... ${response.file_size_mb ? `(${response.file_size_mb} MB)` : ''}`,
+          });
+
+        } else {
+          // Fallback for any other status
+          toast({
+            title: "Upload Complete",
+            description: response.message || `Uploaded ${file.name}`,
+          });
+
+          // Refresh documents
+          await fetchDocuments(false);
+        }
+
       } catch (error) {
         toast({
           title: "Upload Failed",

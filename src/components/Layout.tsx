@@ -1,5 +1,6 @@
 import { ReactNode, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
+import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet';
@@ -12,7 +13,8 @@ interface LayoutProps {
 const Layout = ({ children }: LayoutProps) => {
   const location = useLocation();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-  
+  const { user, logout, isLoading } = useAuth();
+
   const navigation = [
     { name: 'Chat', href: '/', icon: MessageSquare },
     { name: 'Documents', href: '/documents', icon: FileText },
@@ -53,6 +55,24 @@ const Layout = ({ children }: LayoutProps) => {
               })}
             </nav>
           </ScrollArea>
+
+          {/* User Section */}
+          <div className="border-t border-border p-4 mt-auto">
+            {isLoading ? (
+              <div className="animate-pulse h-16 bg-muted rounded" />
+            ) : user ? (
+              <>
+                <div className="flex items-center mb-3 px-2">
+                  <User className="h-5 w-5 mr-2 text-muted-foreground flex-shrink-0" />
+                  <span className="text-sm font-medium truncate">{user.email}</span>
+                </div>
+                <Button onClick={logout} variant="outline" size="sm" className="w-full">
+                  <LogOut className="h-4 w-4 mr-2" />
+                  Logout
+                </Button>
+              </>
+            ) : null}
+          </div>
         </div>
       </div>
 
@@ -102,6 +122,32 @@ const Layout = ({ children }: LayoutProps) => {
                       })}
                     </nav>
                   </ScrollArea>
+
+                  {/* User Section - Mobile */}
+                  <div className="border-t border-border p-4 mt-auto">
+                    {isLoading ? (
+                      <div className="animate-pulse h-16 bg-muted rounded" />
+                    ) : user ? (
+                      <>
+                        <div className="flex items-center mb-3 px-2">
+                          <User className="h-5 w-5 mr-2 text-muted-foreground flex-shrink-0" />
+                          <span className="text-sm font-medium truncate">{user.email}</span>
+                        </div>
+                        <Button
+                          onClick={() => {
+                            setIsMobileMenuOpen(false);
+                            logout();
+                          }}
+                          variant="outline"
+                          size="sm"
+                          className="w-full"
+                        >
+                          <LogOut className="h-4 w-4 mr-2" />
+                          Logout
+                        </Button>
+                      </>
+                    ) : null}
+                  </div>
                 </div>
               </SheetContent>
             </Sheet>
