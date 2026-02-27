@@ -84,7 +84,7 @@ const Signup = () => {
         <CardHeader className="space-y-1">
           <CardTitle className="text-2xl font-bold text-center">Create an Account</CardTitle>
           <CardDescription className="text-center">
-            Enter your details to get started with Legal AI
+            Enter your details to get started with Multimodel RAG
           </CardDescription>
         </CardHeader>
 

@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import Layout from '@/components/Layout';
@@ -42,10 +43,11 @@ interface Document {
 }
 
 const Chat = () => {
+  const navigate = useNavigate();
   const [messages, setMessages] = useState<Message[]>([
     {
       id: '1',
-      content: "Hello! I'm your Legal AI assistant. How can I help you today?",
+      content: "Hello! I'm your Multimodel RAG assistant. How can I help you today?",
       sender: 'ai',
       timestamp: new Date(Date.now() - 1000 * 60 * 5),
     },
@@ -154,7 +156,7 @@ const Chat = () => {
     setMessages([
       {
         id: '1',
-        content: "Hello! I'm your Legal AI assistant. How can I help you today?",
+        content: "Hello! I'm your Multimodel RAG assistant. How can I help you today?",
         sender: 'ai',
         timestamp: new Date(),
       },
@@ -276,7 +278,7 @@ const Chat = () => {
           {/* Header */}
           <div className="border-b p-4 bg-white">
             <div className="flex items-center justify-between">
-              <h1 className="text-2xl font-bold">Legal Chat Assistant</h1>
+              <h1 className="text-2xl font-bold">Multimodel Chat Assistant</h1>
               <div className="flex items-center space-x-4">
                 <span className="text-sm text-gray-600">Select document:</span>
                 <Select
@@ -382,7 +384,7 @@ const Chat = () => {
                     Please upload and process documents before you can start chatting
                   </p>
                   <Button
-                    onClick={() => window.location.href = '/documents'}
+                    onClick={() => navigate('/documents')}
                     variant="default"
                   >
                     Upload Documents

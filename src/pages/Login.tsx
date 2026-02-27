@@ -63,7 +63,7 @@ const Login = () => {
     <div className="flex items-center justify-center min-h-screen bg-background p-4">
       <Card className="w-full max-w-md">
         <CardHeader className="space-y-1">
-          <CardTitle className="text-2xl font-bold text-center">Login to Legal AI</CardTitle>
+          <CardTitle className="text-2xl font-bold text-center">Login to Multimodel RAG</CardTitle>
           <CardDescription className="text-center">
             Enter your credentials to access your account
           </CardDescription>

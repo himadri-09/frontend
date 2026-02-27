@@ -31,7 +31,7 @@ const Layout = ({ children }: LayoutProps) => {
         <div className="flex flex-col h-full border-r border-border bg-card">
           <div className="flex items-center h-16 px-6 border-b border-border">
             <Link to="/" className="flex items-center">
-              <span className="text-xl font-bold">Legal AI</span>
+              <span className="text-xl font-bold">Multimodel RAG</span>
             </Link>
           </div>
           <ScrollArea className="flex-1">
@@ -81,7 +81,7 @@ const Layout = ({ children }: LayoutProps) => {
         <div className="md:hidden">
           <div className="flex items-center justify-between h-16 px-4 border-b border-border bg-card">
             <Link to="/" className="flex items-center">
-              <span className="text-xl font-bold">Legal AI</span>
+              <span className="text-xl font-bold">Multimodel RAG</span>
             </Link>
             <Sheet open={isMobileMenuOpen} onOpenChange={setIsMobileMenuOpen}>
               <SheetTrigger asChild>
@@ -97,7 +97,7 @@ const Layout = ({ children }: LayoutProps) => {
                       className="flex items-center"
                       onClick={() => setIsMobileMenuOpen(false)}
                     >
-                      <span className="text-xl font-bold">Legal AI</span>
+                      <span className="text-xl font-bold">Multimodel RAG</span>
                     </Link>
                   </div>
                   <ScrollArea className="flex-1">
