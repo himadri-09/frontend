@@ -271,4 +271,96 @@
   .badge-accent {
     @apply bg-accent text-accent-foreground;
   }
+
+  /* Markdown content styling for chat messages */
+  .prose {
+    @apply text-sm;
+  }
+
+  .prose strong {
+    @apply font-bold;
+  }
+
+  .prose em {
+    @apply italic;
+  }
+
+  .prose h1,
+  .prose h2,
+  .prose h3,
+  .prose h4,
+  .prose h5,
+  .prose h6 {
+    @apply font-bold mt-4 mb-2;
+  }
+
+  .prose h1 {
+    @apply text-xl;
+  }
+
+  .prose h2 {
+    @apply text-lg;
+  }
+
+  .prose h3 {
+    @apply text-base;
+  }
+
+  .prose ul,
+  .prose ol {
+    @apply my-2 ml-4;
+  }
+
+  .prose ul {
+    @apply list-disc;
+  }
+
+  .prose ol {
+    @apply list-decimal;
+  }
+
+  .prose li {
+    @apply my-1;
+  }
+
+  .prose p {
+    @apply my-2;
+  }
+
+  .prose code {
+    @apply bg-gray-200 dark:bg-gray-700 px-1.5 py-0.5 rounded text-xs font-mono;
+  }
+
+  .prose pre {
+    @apply bg-gray-200 dark:bg-gray-700 p-3 rounded-lg overflow-x-auto my-2;
+  }
+
+  .prose pre code {
+    @apply bg-transparent p-0;
+  }
+
+  .prose blockquote {
+    @apply border-l-4 border-gray-400 pl-4 italic my-2;
+  }
+
+  .prose a {
+    @apply text-blue-600 hover:text-blue-800 underline;
+  }
+
+  .prose table {
+    @apply w-full border-collapse my-2;
+  }
+
+  .prose th,
+  .prose td {
+    @apply border border-gray-300 px-3 py-1;
+  }
+
+  .prose th {
+    @apply bg-gray-100 dark:bg-gray-800 font-bold;
+  }
+
+  .prose hr {
+    @apply my-4 border-t border-gray-300;
+  }
 }
