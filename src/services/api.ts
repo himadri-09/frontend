@@ -2,7 +2,6 @@ import { supabase } from '@/lib/supabase';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000';
 
-// Backend response interface
 interface BackendDocument {
   id: string;
   user_id: string;
@@ -14,9 +13,10 @@ interface BackendDocument {
   uploaded_at: string;
   processed_at: string | null;
   blob_url?: string;
+  source_type?: 'pdf' | 'web';   // ← new
+  source_url?: string;            // ← new
 }
 
-// Frontend document interface
 export interface Document {
   id: string;
   name: string;
@@ -26,6 +26,8 @@ export interface Document {
   status: 'Processing' | 'Analyzed' | 'Failed';
   chunk_count?: number;
   blob_url?: string;
+  source_type?: 'pdf' | 'web';   // ← new
+  source_url?: string;            // ← new
 }
 
 export interface ProcessingJob {
@@ -44,6 +46,15 @@ export interface ProcessingJob {
   requires_polling?: boolean;
 }
 
+// ── new: web crawl response ────────────────────────────────────────
+export interface CrawlJobResponse {
+  job_id: string;
+  message: string;
+  status: string;
+  site_slug: string;
+  check_status_url: string;
+}
+
 export interface ChatResponse {
   answer: string;
   conversation_id?: string;
@@ -51,6 +62,8 @@ export interface ChatResponse {
     type: string;
     page: number;
     content_preview: string;
+    source_url?: string;
+    page_title?: string;
   }>;
 }
 
@@ -74,103 +87,74 @@ export interface Message {
     type: string;
     page: number;
     content_preview: string;
+    source_url?: string;
   }>;
 }
 
 class ApiService {
-  /**
-   * Get authorization header with Supabase access token
-   * This automatically handles token refresh via Supabase SDK
-   */
   private async getAuthHeader(): Promise<{ Authorization: string }> {
-    const {
-      data: { session },
-      error,
-    } = await supabase.auth.getSession();
-
-    if (error || !session) {
-      throw new Error('Not authenticated');
-    }
-
-    return {
-      Authorization: `Bearer ${session.access_token}`,
-    };
+    const { data: { session }, error } = await supabase.auth.getSession();
+    if (error || !session) throw new Error('Not authenticated');
+    return { Authorization: `Bearer ${session.access_token}` };
   }
 
-  /**
-   * Fetch with automatic Supabase authentication
-   * No manual token refresh needed - Supabase handles it!
-   */
   private async fetchWithAuth(url: string, options: RequestInit = {}): Promise<Response> {
     const authHeader = await this.getAuthHeader();
-
-    const headers = {
-      ...options.headers,
-      ...authHeader,
-    };
-
+    const headers = { ...options.headers, ...authHeader };
     const response = await fetch(url, { ...options, headers });
 
-    // If 401, session might be expired - try to refresh
     if (response.status === 401) {
-      // Supabase will automatically refresh if possible
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-
-      if (!session) {
-        throw new Error('Session expired. Please login again.');
-      }
-
-      // Retry with refreshed token
-      const retryHeaders = {
-        ...options.headers,
-        Authorization: `Bearer ${session.access_token}`,
-      };
-
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error('Session expired. Please login again.');
+      const retryHeaders = { ...options.headers, Authorization: `Bearer ${session.access_token}` };
       return fetch(url, { ...options, headers: retryHeaders });
     }
-
     return response;
   }
 
-  /**
-   * Upload document to backend
-   */
+  // ── PDF upload ──────────────────────────────────────────────────
   async uploadDocument(file: File): Promise<ProcessingJob> {
     const formData = new FormData();
     formData.append('file', file);
-
-    const response = await this.fetchWithAuth(`${API_BASE_URL}/upload`, {
-      method: 'POST',
-      body: formData,
-    });
-
-    if (!response.ok) {
-      throw new Error('Upload failed');
-    }
-
+    const response = await this.fetchWithAuth(`${API_BASE_URL}/upload`, { method: 'POST', body: formData });
+    if (!response.ok) throw new Error('Upload failed');
     return response.json();
   }
 
-  /**
-   * Get job status
-   */
   async getJobStatus(jobId: string): Promise<ProcessingJob> {
     const response = await this.fetchWithAuth(`${API_BASE_URL}/status/${jobId}`);
-
-    if (!response.ok) {
-      throw new Error('Failed to get job status');
-    }
-
+    if (!response.ok) throw new Error('Failed to get job status');
     return response.json();
   }
 
-  /**
-   * Transform backend document to frontend format
-   */
+  // ── Web crawl ───────────────────────────────────────────────────
+  async crawlWebsite(
+    url: string,
+    maxPages = 100,
+    maxDepth = 5,
+  ): Promise<CrawlJobResponse> {
+    const response = await this.fetchWithAuth(`${API_BASE_URL}/crawl`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url, max_pages: maxPages, max_depth: maxDepth }),
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.detail || 'Crawl failed');
+    }
+    return response.json();
+  }
+
+  async getCrawlStatus(jobId: string): Promise<ProcessingJob> {
+    const response = await this.fetchWithAuth(`${API_BASE_URL}/crawl/status/${jobId}`);
+    if (!response.ok) throw new Error('Failed to get crawl status');
+    return response.json();
+  }
+
+  // ── Transform backend doc → frontend doc ───────────────────────
   private transformDocument(backendDoc: BackendDocument): Document {
     const formatFileSize = (bytes: number): string => {
+      if (bytes === 0) return '0 B';
       if (bytes < 1024) return `${bytes} B`;
       if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(2)} KB`;
       return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
@@ -178,142 +162,82 @@ class ApiService {
 
     const formatDate = (dateString: string): string => {
       const date = new Date(dateString);
-      return date.toLocaleDateString('en-US', {
-        year: 'numeric',
-        month: 'short',
-        day: 'numeric',
-      });
+      return date.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
     };
 
     const mapStatus = (status: string): 'Processing' | 'Analyzed' | 'Failed' => {
       switch (status) {
-        case 'completed':
-          return 'Analyzed';
+        case 'completed':  return 'Analyzed';
         case 'processing':
-        case 'pending':
-          return 'Processing';
-        case 'failed':
-          return 'Failed';
-        default:
-          return 'Processing';
+        case 'pending':    return 'Processing';
+        case 'failed':     return 'Failed';
+        default:           return 'Processing';
       }
     };
 
     return {
-      id: backendDoc.id,
-      name: backendDoc.original_filename,
-      pdf_name: backendDoc.pdf_name,
-      date: formatDate(backendDoc.uploaded_at),
-      size: formatFileSize(backendDoc.file_size_bytes),
-      status: mapStatus(backendDoc.upload_status),
+      id:          backendDoc.id,
+      name:        backendDoc.original_filename,   // URL for web, filename for PDF
+      pdf_name:    backendDoc.pdf_name,
+      date:        formatDate(backendDoc.uploaded_at),
+      size:        formatFileSize(backendDoc.file_size_bytes),
+      status:      mapStatus(backendDoc.upload_status),
       chunk_count: backendDoc.chunks_count,
-      blob_url: backendDoc.blob_url,
+      blob_url:    backendDoc.blob_url,
+      source_type: backendDoc.source_type || 'pdf',
+      source_url:  backendDoc.source_url,
     };
   }
 
-  /**
-   * Get all documents
-   */
+  // ── Documents list ──────────────────────────────────────────────
   async getAllDocuments(): Promise<Document[]> {
     const response = await this.fetchWithAuth(`${API_BASE_URL}/documents`);
-
-    if (!response.ok) {
-      throw new Error('Failed to fetch documents');
-    }
-
+    if (!response.ok) throw new Error('Failed to fetch documents');
     const data = await response.json();
     return data.documents.map((doc: BackendDocument) => this.transformDocument(doc));
   }
 
-  /**
-   * Delete document
-   */
   async deleteDocument(documentId: string): Promise<void> {
-    const response = await this.fetchWithAuth(`${API_BASE_URL}/documents/${documentId}`, {
-      method: 'DELETE',
-    });
-
-    if (!response.ok) {
-      throw new Error('Failed to delete document');
-    }
+    const response = await this.fetchWithAuth(`${API_BASE_URL}/documents/${documentId}`, { method: 'DELETE' });
+    if (!response.ok) throw new Error('Failed to delete document');
   }
 
-  /**
-   * Get processed documents
-   */
-  async getProcessedDocuments(): Promise<Array<{ id: string; name: string }>> {
+  async getProcessedDocuments(): Promise<Array<{ id: string; name: string; source_type?: string }>> {
     const response = await this.fetchWithAuth(`${API_BASE_URL}/documents/processed`);
-
-    if (!response.ok) {
-      throw new Error('Failed to fetch processed documents');
-    }
-
+    if (!response.ok) throw new Error('Failed to fetch processed documents');
     const data = await response.json();
     return data.documents;
   }
 
-  /**
-   * Query document
-   */
+  // ── Query ────────────────────────────────────────────────────────
   async queryDocument(query: string, pdfName?: string, conversationId?: string): Promise<ChatResponse> {
     const response = await this.fetchWithAuth(`${API_BASE_URL}/query`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        query,
-        pdf_name: pdfName,
-        conversation_id: conversationId,
-      }),
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query, pdf_name: pdfName, conversation_id: conversationId }),
     });
-
-    if (!response.ok) {
-      throw new Error('Query failed');
-    }
-
+    if (!response.ok) throw new Error('Query failed');
     return response.json();
   }
 
-  /**
-   * Get all conversations for the current user
-   */
+  // ── Conversations ────────────────────────────────────────────────
   async getAllConversations(): Promise<Conversation[]> {
     const response = await this.fetchWithAuth(`${API_BASE_URL}/conversations`);
-
-    if (!response.ok) {
-      throw new Error('Failed to fetch conversations');
-    }
-
+    if (!response.ok) throw new Error('Failed to fetch conversations');
     const data = await response.json();
     return data.conversations;
   }
 
-  /**
-   * Get messages for a specific conversation
-   */
   async getConversationMessages(conversationId: string): Promise<Message[]> {
     const response = await this.fetchWithAuth(`${API_BASE_URL}/conversations/${conversationId}/messages`);
-
-    if (!response.ok) {
-      throw new Error('Failed to fetch conversation messages');
-    }
-
+    if (!response.ok) throw new Error('Failed to fetch conversation messages');
     const data = await response.json();
     return data.messages;
   }
 
-  /**
-   * Delete a conversation
-   */
   async deleteConversation(conversationId: string): Promise<void> {
-    const response = await this.fetchWithAuth(`${API_BASE_URL}/conversations/${conversationId}`, {
-      method: 'DELETE',
-    });
-
-    if (!response.ok) {
-      throw new Error('Failed to delete conversation');
-    }
+    const response = await this.fetchWithAuth(`${API_BASE_URL}/conversations/${conversationId}`, { method: 'DELETE' });
+    if (!response.ok) throw new Error('Failed to delete conversation');
   }
 }
 

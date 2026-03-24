@@ -2,161 +2,228 @@
 import React, { useState, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { X, Upload, FileText } from 'lucide-react';
+import { X, Upload, FileText, Globe, Link } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
 
-// Define the props interface
 export interface DocumentUploadProps {
-  onUpload: (files: File[]) => Promise<void>;
-  onClose: () => void; // Add this prop
+  onUpload: (files: File[], websiteUrl?: string) => Promise<void>;
+  onClose: () => void;
 }
 
+type Mode = 'pdf' | 'website';
+
 const DocumentUpload: React.FC<DocumentUploadProps> = ({ onUpload, onClose }) => {
+  const [mode, setMode] = useState<Mode>('pdf');
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [websiteUrl, setWebsiteUrl] = useState('');
   const [uploading, setUploading] = useState(false);
   const { toast } = useToast();
 
+  // ── PDF handlers ───────────────────────────────────────────────
   const handleFileSelect = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files || []);
-    const pdfFiles = files.filter(file => file.type === 'application/pdf');
-    
+    const pdfFiles = files.filter(f => f.type === 'application/pdf');
     if (pdfFiles.length !== files.length) {
-      toast({
-        title: "Invalid Files",
-        description: "Only PDF files are allowed",
-        variant: "destructive",
-      });
+      toast({ title: 'Invalid files', description: 'Only PDF files are allowed', variant: 'destructive' });
     }
-    
     setSelectedFiles(pdfFiles);
   }, [toast]);
 
   const handleDrop = useCallback((event: React.DragEvent<HTMLDivElement>) => {
     event.preventDefault();
     const files = Array.from(event.dataTransfer.files);
-    const pdfFiles = files.filter(file => file.type === 'application/pdf');
-    
+    const pdfFiles = files.filter(f => f.type === 'application/pdf');
     if (pdfFiles.length !== files.length) {
-      toast({
-        title: "Invalid Files",
-        description: "Only PDF files are allowed",
-        variant: "destructive",
-      });
+      toast({ title: 'Invalid files', description: 'Only PDF files are allowed', variant: 'destructive' });
     }
-    
     setSelectedFiles(pdfFiles);
   }, [toast]);
 
-  const handleDragOver = (event: React.DragEvent<HTMLDivElement>) => {
-    event.preventDefault();
+  const handleDragOver = (e: React.DragEvent) => e.preventDefault();
+  const removeFile = (i: number) => setSelectedFiles(fs => fs.filter((_, idx) => idx !== i));
+
+  // ── URL validation ──────────────────────────────────────────────
+  const isValidUrl = (url: string) => {
+    try {
+      const p = new URL(url);
+      return p.protocol === 'http:' || p.protocol === 'https:';
+    } catch { return false; }
   };
 
-  const handleUpload = async () => {
-    console.log('Upload started with files:', selectedFiles);
-    if (selectedFiles.length === 0) return;
-
-    setUploading(true);
-    try {
-      console.log('Calling onUpload...');
-      await onUpload(selectedFiles);
-      console.log('Upload successful');
-      setSelectedFiles([]);
-    } catch (error) {
-      console.error('Upload error:', error);
-      toast({
-        title: "Upload Failed",
-        description: "Failed to upload files",
-        variant: "destructive",
-      });
-    } finally {
-      setUploading(false);
+  // ── Submit ──────────────────────────────────────────────────────
+  const handleSubmit = async () => {
+    if (mode === 'pdf') {
+      if (selectedFiles.length === 0) return;
+      setUploading(true);
+      try { await onUpload(selectedFiles); }
+      catch { toast({ title: 'Upload failed', variant: 'destructive' }); }
+      finally { setUploading(false); }
+    } else {
+      if (!isValidUrl(websiteUrl)) {
+        toast({ title: 'Invalid URL', description: 'Please enter a valid http:// or https:// URL', variant: 'destructive' });
+        return;
+      }
+      setUploading(true);
+      try { await onUpload([], websiteUrl); }
+      catch { toast({ title: 'Crawl failed', variant: 'destructive' }); }
+      finally { setUploading(false); }
     }
   };
 
-  const removeFile = (index: number) => {
-    setSelectedFiles(files => files.filter((_, i) => i !== index));
-  };
+  const canSubmit = mode === 'pdf' ? selectedFiles.length > 0 : isValidUrl(websiteUrl);
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-lg p-6 w-full max-w-md mx-4">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-xl font-semibold">Upload Documents</h2>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={onClose}
-            className="p-1"
-          >
-            <X className="h-4 w-4" />
-          </Button>
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-md mx-4 overflow-hidden">
+
+        {/* ── Header ── */}
+        <div className="flex items-center justify-between px-6 py-4 border-b">
+          <h2 className="text-lg font-semibold">Add Knowledge Source</h2>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 transition-colors">
+            <X className="h-5 w-5" />
+          </button>
         </div>
 
-        {/* File Drop Zone */}
-        <div
-          onDrop={handleDrop}
-          onDragOver={handleDragOver}
-          className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center mb-4 hover:border-gray-400 transition-colors"
-        >
-          <Upload className="mx-auto h-12 w-12 text-gray-400 mb-4" />
-          <p className="text-gray-600 mb-2">Drag and drop PDF files here, or</p>
-          <Input
-            type="file"
-            accept=".pdf"
-            multiple
-            onChange={handleFileSelect}
-            className="hidden"
-            id="file-upload"
-          />
-          <Button
-            variant="outline"
-            onClick={() => document.getElementById('file-upload')?.click()}
-          >
-            Browse Files
-          </Button>
-        </div>
-
-        {/* Selected Files */}
-        {selectedFiles.length > 0 && (
-          <div className="mb-4">
-            <h3 className="font-medium mb-2">Selected Files:</h3>
-            <div className="space-y-2">
-              {selectedFiles.map((file, index) => (
-                <div key={index} className="flex items-center justify-between bg-gray-50 p-2 rounded">
-                  <div className="flex items-center">
-                    <FileText className="h-4 w-4 text-red-600 mr-2" />
-                    <span className="text-sm">{file.name}</span>
-                    <span className="text-xs text-gray-500 ml-2">
-                      ({(file.size / (1024 * 1024)).toFixed(1)} MB)
-                    </span>
-                  </div>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => removeFile(index)}
-                    className="p-1"
-                  >
-                    <X className="h-3 w-3" />
-                  </Button>
-                </div>
-              ))}
-            </div>
+        {/* ── Mode toggle ── */}
+        <div className="px-6 pt-5">
+          <div className="flex gap-2 p-1 bg-gray-100 rounded-lg">
+            <button
+              onClick={() => { setMode('pdf'); setWebsiteUrl(''); }}
+              className={`flex-1 flex items-center justify-center gap-2 py-2 px-3 rounded-md text-sm font-medium transition-all ${
+                mode === 'pdf'
+                  ? 'bg-white shadow-sm text-gray-900'
+                  : 'text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              <FileText className="h-4 w-4" />
+              PDF Document
+            </button>
+            <button
+              onClick={() => { setMode('website'); setSelectedFiles([]); }}
+              className={`flex-1 flex items-center justify-center gap-2 py-2 px-3 rounded-md text-sm font-medium transition-all ${
+                mode === 'website'
+                  ? 'bg-white shadow-sm text-gray-900'
+                  : 'text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              <Globe className="h-4 w-4" />
+              Website
+            </button>
           </div>
-        )}
+        </div>
 
-        {/* Actions */}
-        <div className="flex justify-end space-x-2">
-          <Button
-            variant="outline"
-            onClick={onClose}
-          >
+        {/* ── Body ── */}
+        <div className="px-6 py-5">
+
+          {/* PDF mode */}
+          {mode === 'pdf' && (
+            <>
+              <div
+                onDrop={handleDrop}
+                onDragOver={handleDragOver}
+                className="border-2 border-dashed border-gray-200 rounded-xl p-8 text-center hover:border-gray-300 transition-colors cursor-pointer"
+                onClick={() => document.getElementById('file-upload')?.click()}
+              >
+                <Upload className="mx-auto h-10 w-10 text-gray-300 mb-3" />
+                <p className="text-sm text-gray-500 mb-3">Drag and drop PDF files here, or</p>
+                <Input type="file" accept=".pdf" multiple onChange={handleFileSelect} className="hidden" id="file-upload" />
+                <Button variant="outline" size="sm" type="button" onClick={e => { e.stopPropagation(); document.getElementById('file-upload')?.click(); }}>
+                  Browse files
+                </Button>
+                <p className="text-xs text-gray-400 mt-3">PDF files up to 50 MB</p>
+              </div>
+
+              {selectedFiles.length > 0 && (
+                <div className="mt-4 space-y-2">
+                  {selectedFiles.map((file, i) => (
+                    <div key={i} className="flex items-center justify-between bg-gray-50 rounded-lg px-3 py-2">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <FileText className="h-4 w-4 text-red-500 flex-shrink-0" />
+                        <span className="text-sm truncate">{file.name}</span>
+                        <span className="text-xs text-gray-400 flex-shrink-0">
+                          ({(file.size / (1024 * 1024)).toFixed(1)} MB)
+                        </span>
+                      </div>
+                      <button onClick={() => removeFile(i)} className="text-gray-400 hover:text-gray-600 ml-2">
+                        <X className="h-4 w-4" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+
+          {/* Website mode */}
+          {mode === 'website' && (
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                  Website URL
+                </label>
+                <div className="relative">
+                  <Link className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+                  <input
+                    type="url"
+                    value={websiteUrl}
+                    onChange={e => setWebsiteUrl(e.target.value)}
+                    placeholder="https://docs.example.com/"
+                    className="w-full pl-9 pr-4 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-black focus:border-transparent transition-all"
+                  />
+                </div>
+                {websiteUrl && !isValidUrl(websiteUrl) && (
+                  <p className="text-xs text-red-500 mt-1">Please enter a valid URL starting with http:// or https://</p>
+                )}
+              </div>
+
+              {/* Info box */}
+              <div className="bg-blue-50 border border-blue-100 rounded-lg p-3 space-y-1.5">
+                <p className="text-xs font-medium text-blue-800">What gets crawled</p>
+                <ul className="text-xs text-blue-700 space-y-1">
+                  <li className="flex items-start gap-1.5">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-blue-400 flex-shrink-0" />
+                    All pages reachable from the URL you enter
+                  </li>
+                  <li className="flex items-start gap-1.5">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-blue-400 flex-shrink-0" />
+                    Text content, headings, and inline images
+                  </li>
+                  <li className="flex items-start gap-1.5">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-blue-400 flex-shrink-0" />
+                    Up to 100 pages by default
+                  </li>
+                </ul>
+                <p className="text-xs text-blue-600 mt-1">
+                  Crawling runs in the background. You can leave this page.
+                </p>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* ── Footer ── */}
+        <div className="flex justify-end gap-2 px-6 py-4 border-t bg-gray-50">
+          <Button variant="outline" onClick={onClose} disabled={uploading}>
             Cancel
           </Button>
           <Button
-            onClick={handleUpload}
-            disabled={selectedFiles.length === 0 || uploading}
+            onClick={handleSubmit}
+            disabled={!canSubmit || uploading}
+            className="min-w-[120px]"
           >
-            {uploading ? 'Uploading...' : `Upload ${selectedFiles.length} file${selectedFiles.length !== 1 ? 's' : ''}`}
+            {uploading ? (
+              <span className="flex items-center gap-2">
+                <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
+                </svg>
+                {mode === 'pdf' ? 'Uploading…' : 'Starting…'}
+              </span>
+            ) : mode === 'pdf' ? (
+              `Upload ${selectedFiles.length > 0 ? selectedFiles.length : ''} file${selectedFiles.length !== 1 ? 's' : ''}`
+            ) : (
+              'Crawl website'
+            )}
           </Button>
         </div>
       </div>
