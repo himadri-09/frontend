@@ -1,4 +1,4 @@
-import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
+import { HashRouter as Router, Routes, Route } from 'react-router-dom';
 import { Toaster } from 'sonner';
 import { AuthProvider } from './contexts/AuthContext';
 import ProtectedRoute from './components/ProtectedRoute';
@@ -13,6 +13,7 @@ function App() {
     <Router>
       <AuthProvider>
         <Toaster position="top-right" richColors />
+
         <Routes>
           {/* Public routes */}
           <Route path="/login" element={<Login />} />
@@ -27,6 +28,7 @@ function App() {
               </ProtectedRoute>
             }
           />
+
           <Route
             path="/documents"
             element={
@@ -36,9 +38,10 @@ function App() {
             }
           />
 
-          {/* 404 */}
+          {/* 404 route */}
           <Route path="*" element={<NotFound />} />
         </Routes>
+
       </AuthProvider>
     </Router>
   );
