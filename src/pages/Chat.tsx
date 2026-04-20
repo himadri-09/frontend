@@ -1,3 +1,4 @@
+// src/pages/Chat.tsx
 import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
@@ -13,7 +14,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { apiService, ChatResponse, Conversation } from '@/services/api';
+import {
+  apiService,
+  ChatResponse,
+  Conversation,
+  RoutingDecision,
+  UnifiedSource,
+} from '@/services/api';
 import { useToast } from '@/components/ui/use-toast';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import {
@@ -26,6 +33,8 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
+import RoutingBadge from '@/components/RoutingBadge';
+import SqlResultTable from '@/components/SqlResultTable';
 
 interface Message {
   id: string;
@@ -34,37 +43,43 @@ interface Message {
   timestamp: Date;
   sources?: Array<{
     type: string;
-    page: number;
-    content_preview: string;
+    page?: number;
+    content_preview?: string;
+    table?: string;
   }>;
+  routing?: RoutingDecision;
+  sql_used?: string | null;
+  sql_rows?: Array<Record<string, unknown>>;
 }
 
-interface Document {
-  id: string;
-  name: string;
-}
+const WELCOME_MESSAGE: Message = {
+  id: '1',
+  content:
+    "Hello! I'm your Multimodel RAG assistant. I can answer from your PDFs, websites, or spreadsheets — I'll choose the best source automatically.",
+  sender: 'ai',
+  timestamp: new Date(),
+};
 
 const Chat = () => {
   const navigate = useNavigate();
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: '1',
-      content: "Hello! I'm your Multimodel RAG assistant. How can I help you today?",
-      sender: 'ai',
-      timestamp: new Date(Date.now() - 1000 * 60 * 5),
-    },
-  ]);
+  const [messages, setMessages] = useState<Message[]>([WELCOME_MESSAGE]);
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [activeDocument, setActiveDocument] = useState<string | null>(null);
-  const [documents, setDocuments] = useState<Document[]>([]);
-  const [hasProcessedDocs, setHasProcessedDocs] = useState(false);
+
+  // Unified data sources (PDFs + websites + tabular)
+  const [dataSources, setDataSources] = useState<UnifiedSource[]>([]);
+  const [hasAnyData, setHasAnyData] = useState(false);
 
   // Conversation state
   const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
+  const [currentConversationId, setCurrentConversationId] = useState<string | null>(
+    null,
+  );
   const [isLoadingConversations, setIsLoadingConversations] = useState(false);
-  const [conversationToDelete, setConversationToDelete] = useState<string | null>(null);
+  const [conversationToDelete, setConversationToDelete] = useState<string | null>(
+    null,
+  );
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const { toast } = useToast();
@@ -78,27 +93,33 @@ const Chat = () => {
   }, [messages]);
 
   useEffect(() => {
-    fetchProcessedDocuments();
+    fetchDataSources();
     fetchConversations();
   }, []);
 
-  const fetchProcessedDocuments = async () => {
-    try {
-      const docs = await apiService.getProcessedDocuments();
-      setDocuments(docs);
-      setHasProcessedDocs(docs.length > 0);
+  // ─────────────────────────────────────────────────────────────────────────
+  // Fetch data sources (PDFs + websites + tabular, unified)
+  // ─────────────────────────────────────────────────────────────────────────
 
-      if (activeDocument && !docs.some((d) => d.id === activeDocument)) {
+  const fetchDataSources = async () => {
+    try {
+      const sources = await apiService.getAllDataSources();
+      setDataSources(sources);
+      setHasAnyData(sources.length > 0);
+
+      // Clear active doc if it no longer exists (tabular sources can't be
+      // selected as "active" from this dropdown, only PDFs/web can)
+      if (activeDocument && !sources.some((s) => s.id === activeDocument)) {
         setActiveDocument(null);
       }
     } catch (error) {
       toast({
         title: 'Error',
-        description: 'Failed to fetch documents',
+        description: 'Failed to fetch data sources',
         variant: 'destructive',
       });
       // Fail open: allow chat even if fetch fails
-      setHasProcessedDocs(true);
+      setHasAnyData(true);
     }
   };
 
@@ -123,22 +144,21 @@ const Chat = () => {
     try {
       const apiMessages = await apiService.getConversationMessages(conversationId);
 
-      // Transform API messages to UI messages
       const transformedMessages: Message[] = apiMessages.map((msg) => ({
         id: msg.id,
         content: msg.content,
         sender: msg.role === 'user' ? 'user' : 'ai',
         timestamp: new Date(msg.created_at),
         sources: msg.sources,
+        // Historical messages don't have routing info — that's fine
       }));
 
       setMessages(transformedMessages);
       setCurrentConversationId(conversationId);
 
-      // Set active document from conversation if available
       const conversation = conversations.find((c) => c.id === conversationId);
       if (conversation?.pdf_name) {
-        const doc = documents.find((d) => d.name === conversation.pdf_name);
+        const doc = dataSources.find((d) => d.name === conversation.pdf_name);
         if (doc) {
           setActiveDocument(doc.id);
         }
@@ -155,14 +175,7 @@ const Chat = () => {
   };
 
   const startNewConversation = () => {
-    setMessages([
-      {
-        id: '1',
-        content: "Hello! I'm your Multimodel RAG assistant. How can I help you today?",
-        sender: 'ai',
-        timestamp: new Date(),
-      },
-    ]);
+    setMessages([WELCOME_MESSAGE]);
     setCurrentConversationId(null);
     setActiveDocument(null);
   };
@@ -170,19 +183,13 @@ const Chat = () => {
   const handleDeleteConversation = async (conversationId: string) => {
     try {
       await apiService.deleteConversation(conversationId);
-
-      // Remove from list
       setConversations((prev) => prev.filter((c) => c.id !== conversationId));
 
-      // If deleting current conversation, start new one
       if (currentConversationId === conversationId) {
         startNewConversation();
       }
 
-      toast({
-        title: 'Success',
-        description: 'Conversation deleted',
-      });
+      toast({ title: 'Success', description: 'Conversation deleted' });
     } catch (error) {
       toast({
         title: 'Error',
@@ -193,6 +200,10 @@ const Chat = () => {
       setConversationToDelete(null);
     }
   };
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Send message
+  // ─────────────────────────────────────────────────────────────────────────
 
   const handleSendMessage = async () => {
     if (!inputValue.trim()) return;
@@ -212,7 +223,7 @@ const Chat = () => {
       const response: ChatResponse = await apiService.queryDocument(
         inputValue,
         activeDocument || undefined,
-        currentConversationId || undefined
+        currentConversationId || undefined,
       );
 
       const aiMessage: Message = {
@@ -221,205 +232,178 @@ const Chat = () => {
         sender: 'ai',
         timestamp: new Date(),
         sources: response.sources,
+        routing: response.routing,
+        sql_used: response.sql_used,
+        sql_rows: response.sql_rows,
       };
 
       setMessages((prev) => [...prev, aiMessage]);
 
-      // Update conversation ID if returned (new conversation created)
       if (response.conversation_id && !currentConversationId) {
         setCurrentConversationId(response.conversation_id);
-        // Refresh conversations list
         fetchConversations();
       }
     } catch {
       const errorMessage: Message = {
         id: (Date.now() + 1).toString(),
-        content:
-          'Sorry, I encountered an error while processing your question. Please try again.',
+        content: 'Sorry, I encountered an error while processing your question.',
         sender: 'ai',
         timestamp: new Date(),
       };
-
       setMessages((prev) => [...prev, errorMessage]);
-
-      toast({
-        title: 'Error',
-        description: 'Failed to get response',
-        variant: 'destructive',
-      });
     } finally {
       setIsLoading(false);
     }
   };
 
-  const formatTime = (date: Date): string => {
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  };
+  // ─────────────────────────────────────────────────────────────────────────
+  // Filter dropdown options to only PDFs / web (tabular gets auto-selected
+  // by the query router — user doesn't need to pick a specific spreadsheet)
+  // ─────────────────────────────────────────────────────────────────────────
 
-  const formatDate = (dateString: string): string => {
-    const date = new Date(dateString);
-    const now = new Date();
-    const diffMs = now.getTime() - date.getTime();
-    const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-
-    if (diffDays === 0) return 'Today';
-    if (diffDays === 1) return 'Yesterday';
-    if (diffDays < 7) return `${diffDays} days ago`;
-    return date.toLocaleDateString();
-  };
-
-  const handleDocumentChange = (value: string) => {
-    setActiveDocument(value === 'all' ? null : value);
-  };
+  const selectableDocuments = dataSources.filter(
+    (d) => d.kind === 'pdf' || d.kind === 'web',
+  );
+  const tabularCount = dataSources.filter((d) => d.kind === 'tabular').length;
 
   return (
     <Layout>
-      <div className="flex h-screen">
-        {/* Main Chat Area */}
+      <div className="flex h-[calc(100vh-4rem)]">
+        {/* Main chat area */}
         <div className="flex-1 flex flex-col">
-          {/* Header */}
-          <div className="border-b p-4 bg-white">
-            <div className="flex items-center justify-between">
-              <h1 className="text-2xl font-bold">Multimodel Chat Assistant</h1>
-              <div className="flex items-center space-x-4">
-                <span className="text-sm text-gray-600">Select document:</span>
-                <Select
-                  value={activeDocument || 'all'}
-                  onValueChange={handleDocumentChange}
-                >
-                  <SelectTrigger className="w-48">
-                    <SelectValue placeholder="All documents" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All documents</SelectItem>
-                    {documents.map((doc) => (
-                      <SelectItem key={doc.id} value={doc.id}>
-                        {doc.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <Button
-                  onClick={fetchProcessedDocuments}
-                  variant="outline"
-                  size="sm"
-                >
-                  Refresh
-                </Button>
-              </div>
-            </div>
-            <p className="text-sm text-gray-500 mt-2">
-              {activeDocument
-                ? `Chatting with ${documents.find(
-                    (doc) => doc.id === activeDocument
-                  )?.name || ''}`
-                : 'Chatting with all documents'}
-            </p>
+          {/* Header — document selector */}
+          <div className="border-b bg-white p-4 flex items-center gap-4">
+            <Select
+              value={activeDocument || 'all'}
+              onValueChange={(v: string) => setActiveDocument(v === 'all' ? null : v)}
+              disabled={isLoading}
+            >
+              <SelectTrigger className="w-[320px]">
+                <SelectValue placeholder="All sources" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All sources</SelectItem>
+                {selectableDocuments.map((d) => (
+                  <SelectItem key={d.id} value={d.id}>
+                    {d.kind === 'web' ? '🌐 ' : '📄 '}
+                    {d.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {tabularCount > 0 && (
+              <span className="text-xs text-gray-500">
+                · {tabularCount} spreadsheet{tabularCount !== 1 ? 's' : ''} queryable automatically
+              </span>
+            )}
           </div>
 
           {/* Messages */}
-          <div className="flex-1 overflow-y-auto p-4 space-y-4">
-            {messages.map((message) => (
-              <div
-                key={message.id}
-                className={`flex ${
-                  message.sender === 'user' ? 'justify-end' : 'justify-start'
-                }`}
-              >
+          <ScrollArea className="flex-1 p-4">
+            <div className="max-w-3xl mx-auto space-y-4">
+              {messages.map((message) => (
                 <div
-                  className={`max-w-[70%] rounded-lg p-4 ${
-                    message.sender === 'user'
-                      ? 'bg-primary text-primary-foreground'
-                      : 'bg-gray-100 text-gray-900'
+                  key={message.id}
+                  className={`flex ${
+                    message.sender === 'user' ? 'justify-end' : 'justify-start'
                   }`}
                 >
-                  {message.sender === 'user' ? (
-                    <div className="whitespace-pre-wrap">{message.content}</div>
-                  ) : (
-                    <div className="prose prose-sm max-w-none prose-headings:text-gray-900 prose-p:text-gray-900 prose-li:text-gray-900 prose-strong:text-gray-900">
-                      <ReactMarkdown
-                        remarkPlugins={[remarkGfm]}
-                        components={{
-                          // Custom components for better styling
-                          h1: ({ children }) => <h1 className="text-xl font-bold mb-2 mt-4">{children}</h1>,
-                          h2: ({ children }) => <h2 className="text-lg font-bold mb-2 mt-3">{children}</h2>,
-                          h3: ({ children }) => <h3 className="text-base font-bold mb-1 mt-2">{children}</h3>,
-                          p: ({ children }) => <p className="mb-2 leading-relaxed">{children}</p>,
-                          ul: ({ children }) => <ul className="list-disc ml-5 mb-2 space-y-1">{children}</ul>,
-                          ol: ({ children }) => <ol className="list-decimal ml-5 mb-2 space-y-1">{children}</ol>,
-                          li: ({ children }) => <li className="leading-relaxed">{children}</li>,
-                          strong: ({ children }) => <strong className="font-bold">{children}</strong>,
-                          code: ({ className, children }) => {
-                            const isInline = !className;
-                            return isInline ? (
-                              <code className="bg-gray-200 px-1.5 py-0.5 rounded text-xs font-mono">{children}</code>
-                            ) : (
-                              <code className={className}>{children}</code>
-                            );
-                          },
-                          pre: ({ children }) => <pre className="bg-gray-200 p-3 rounded-lg overflow-x-auto my-2">{children}</pre>,
-                        }}
-                      >
+                  <div
+                    className={`max-w-[85%] rounded-lg px-4 py-3 ${
+                      message.sender === 'user'
+                        ? 'bg-primary text-primary-foreground'
+                        : 'bg-gray-100 text-gray-900'
+                    }`}
+                  >
+                    {/* Routing badge (AI messages only, if present) */}
+                    {message.sender === 'ai' && message.routing && (
+                      <div className="mb-2">
+                        <RoutingBadge strategy={message.routing.strategy} />
+                      </div>
+                    )}
+
+                    {/* Message body */}
+                    <div className="prose prose-sm max-w-none dark:prose-invert">
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
                         {message.content}
                       </ReactMarkdown>
                     </div>
-                  )}
 
-                  {message.sources && message.sources.length > 0 && (
-                    <div className="mt-3 pt-3 border-t border-gray-300">
-                      <div className="text-sm font-medium mb-2">Sources:</div>
-                      {message.sources.map((source, index) => (
-                        <div
-                          key={index}
-                          className="text-xs bg-white rounded p-2 mb-1"
-                        >
-                          <div className="font-medium">
-                            {source.type.charAt(0).toUpperCase() +
-                              source.type.slice(1)}{' '}
-                            - Page {source.page}
-                          </div>
-                          <div className="text-gray-600 mt-1">
-                            {source.content_preview}
-                          </div>
+                    {/* SQL results table (if present and not empty) */}
+                    {message.sender === 'ai' &&
+                      message.sql_rows &&
+                      message.sql_rows.length > 0 && (
+                        <SqlResultTable
+                          rows={message.sql_rows}
+                          sqlUsed={message.sql_used}
+                        />
+                      )}
+
+                    {/* Sources (vector + sql combined) */}
+                    {message.sender === 'ai' &&
+                      message.sources &&
+                      message.sources.length > 0 && (
+                        <div className="mt-2 pt-2 border-t border-gray-200">
+                          <p className="text-xs font-semibold text-gray-500 mb-1">
+                            Sources
+                          </p>
+                          <ul className="text-xs text-gray-600 space-y-0.5">
+                            {message.sources.slice(0, 5).map((src, i) => (
+                              <li key={i}>
+                                {src.type === 'sql' ? (
+                                  <span>📊 Table: {src.table}</span>
+                                ) : src.type === 'image' ? (
+                                  <span>🖼️ Image (page {src.page ?? '?'})</span>
+                                ) : (
+                                  <span>
+                                    📄 {src.page ? `Page ${src.page}` : 'Source'}
+                                  </span>
+                                )}
+                              </li>
+                            ))}
+                            {message.sources.length > 5 && (
+                              <li className="text-gray-400">
+                                …and {message.sources.length - 5} more
+                              </li>
+                            )}
+                          </ul>
                         </div>
-                      ))}
-                    </div>
-                  )}
+                      )}
 
-                  <div className="text-xs opacity-70 mt-2">
-                    {formatTime(message.timestamp)}
+                    <p className="text-xs opacity-60 mt-2">
+                      {message.timestamp.toLocaleTimeString()}
+                    </p>
                   </div>
                 </div>
-              </div>
-            ))}
+              ))}
 
-            {isLoading && (
-              <div className="flex justify-start">
-                <div className="bg-gray-100 rounded-lg p-3 flex items-center space-x-2">
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  <span>Analyzing...</span>
+              {isLoading && (
+                <div className="flex justify-start">
+                  <div className="bg-gray-100 rounded-lg px-4 py-3 flex items-center gap-2">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    <span className="text-sm text-gray-600">Thinking…</span>
+                  </div>
                 </div>
-              </div>
-            )}
-            <div ref={messagesEndRef} />
-          </div>
+              )}
 
-          {/* Input */}
-          <div className="border-t p-4 bg-white">
-            {!hasProcessedDocs ? (
+              <div ref={messagesEndRef} />
+            </div>
+          </ScrollArea>
+
+          {/* Input area */}
+          <div className="border-t bg-white p-4">
+            {!hasAnyData ? (
               <div className="flex flex-col items-center justify-center py-4 space-y-4">
                 <div className="text-center">
                   <p className="text-gray-600 font-medium mb-2">
-                    📄 No Documents Available
+                    📄 No Data Sources Available
                   </p>
                   <p className="text-sm text-gray-500 mb-4">
-                    Please upload and process documents before you can start chatting
+                    Upload a PDF, crawl a website, or add a spreadsheet before you
+                    can start chatting
                   </p>
-                  <Button
-                    onClick={() => navigate('/documents')}
-                    variant="default"
-                  >
-                    Upload Documents
+                  <Button onClick={() => navigate('/documents')} variant="default">
+                    Add Data Source
                   </Button>
                 </div>
               </div>
@@ -427,11 +411,11 @@ const Chat = () => {
               <div className="flex space-x-2">
                 <Input
                   value={inputValue}
-                  onChange={(e) => setInputValue(e.target.value)}
-                  placeholder="Type your message..."
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => setInputValue(e.target.value)}
+                  placeholder="Ask a question about your data…"
                   className="flex-1"
                   disabled={isLoading}
-                  onKeyDown={(e) => {
+                  onKeyDown={(e: React.KeyboardEvent<HTMLInputElement>) => {
                     if (e.key === 'Enter' && !e.shiftKey) {
                       e.preventDefault();
                       handleSendMessage();
@@ -450,7 +434,7 @@ const Chat = () => {
           </div>
         </div>
 
-        {/* Sidebar - Conversation History (Right Side) */}
+        {/* Sidebar — Conversation history */}
         <div className="w-64 border-l bg-gray-50 flex flex-col">
           <div className="p-4 border-b bg-white">
             <Button
@@ -465,9 +449,7 @@ const Chat = () => {
 
           <ScrollArea className="flex-1">
             {isLoadingConversations ? (
-              <div className="p-4 text-center text-sm text-gray-500">
-                Loading...
-              </div>
+              <div className="p-4 text-center text-sm text-gray-500">Loading…</div>
             ) : conversations.length === 0 ? (
               <div className="p-4 text-center text-sm text-gray-500">
                 No conversations yet
@@ -479,41 +461,24 @@ const Chat = () => {
                     key={convo.id}
                     className={`group flex items-center justify-between p-3 rounded-lg cursor-pointer hover:bg-white transition-colors ${
                       currentConversationId === convo.id
-                        ? 'bg-white border border-primary'
-                        : 'hover:border hover:border-gray-200'
+                        ? 'bg-white shadow-sm'
+                        : ''
                     }`}
                     onClick={() => loadConversation(convo.id)}
                   >
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <MessageSquare className="h-4 w-4 text-gray-400 flex-shrink-0" />
-                        <div className="text-sm font-medium truncate">
-                          {convo.title}
-                        </div>
-                      </div>
-                      <div className="text-xs text-gray-500 mt-1">
-                        {formatDate(convo.updated_at)}
-                      </div>
-                      {convo.pdf_name && (
-                        <div className="text-xs text-blue-600 mt-1 truncate">
-                          📄 {convo.pdf_name}
-                        </div>
-                      )}
-                      <div className="text-xs text-gray-400 mt-1">
-                        {convo.message_count} messages
-                      </div>
+                    <div className="flex items-center gap-2 min-w-0 flex-1">
+                      <MessageSquare className="h-4 w-4 text-gray-400 flex-shrink-0" />
+                      <span className="text-sm truncate">{convo.title}</span>
                     </div>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="opacity-0 group-hover:opacity-100 transition-opacity"
-                      onClick={(e) => {
+                    <button
+                      onClick={(e: React.MouseEvent) => {
                         e.stopPropagation();
                         setConversationToDelete(convo.id);
                       }}
+                      className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-red-500 transition-opacity"
                     >
-                      <Trash2 className="h-4 w-4 text-red-500" />
-                    </Button>
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
                   </div>
                 ))}
               </div>
@@ -522,14 +487,14 @@ const Chat = () => {
         </div>
       </div>
 
-      {/* Delete Confirmation Dialog */}
+      {/* Delete confirmation */}
       <AlertDialog
         open={conversationToDelete !== null}
-        onOpenChange={(open) => !open && setConversationToDelete(null)}
+        onOpenChange={() => setConversationToDelete(null)}
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete Conversation?</AlertDialogTitle>
+            <AlertDialogTitle>Delete conversation?</AlertDialogTitle>
             <AlertDialogDescription>
               This will permanently delete this conversation and all its messages.
               This action cannot be undone.
@@ -539,7 +504,8 @@ const Chat = () => {
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
               onClick={() =>
-                conversationToDelete && handleDeleteConversation(conversationToDelete)
+                conversationToDelete &&
+                handleDeleteConversation(conversationToDelete)
               }
               className="bg-red-600 hover:bg-red-700"
             >

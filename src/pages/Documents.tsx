@@ -1,19 +1,55 @@
+// src/pages/Documents.tsx
 import { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import Layout from '@/components/Layout';
 import DocumentUpload from '@/components/DocumentUpload';
-import { FileText, Globe, Trash2, Eye, RefreshCw, Info } from 'lucide-react';
-import { apiService, Document, ProcessingJob } from '@/services/api';
+import {
+  FileText,
+  Globe,
+  FileSpreadsheet,
+  Trash2,
+  Eye,
+  RefreshCw,
+  Info,
+} from 'lucide-react';
+import {
+  apiService,
+  Document,
+  ProcessingJob,
+  TabularSource,
+} from '@/services/api';
 import { useToast } from '@/components/ui/use-toast';
+
+// Unified row shape for rendering all three kinds of sources in one table
+interface KnowledgeRow {
+  kind: 'pdf' | 'web' | 'tabular';
+  id: string;             // row-unique id (doc.id for PDF/web, tabular source id for tabular)
+  name: string;           // filename or URL
+  sub_label?: string;     // sheet name, etc.
+  date: string;
+  size: string;
+  status: 'Processing' | 'Analyzed' | 'Failed';
+  rowCount?: number;      // for tabular
+  chunkCount?: number;    // for pdf/web
+  blob_url?: string;
+  source_url?: string;
+}
 
 const Documents = () => {
   const [documents, setDocuments] = useState<Document[]>([]);
+  const [tabularSources, setTabularSources] = useState<TabularSource[]>([]);
   const [loading, setLoading] = useState(true);
   const [showUpload, setShowUpload] = useState(false);
-  const [processingJobs, setProcessingJobs] = useState<Map<string, ProcessingJob>>(new Map());
+  const [processingJobs, setProcessingJobs] = useState<Map<string, ProcessingJob>>(
+    new Map(),
+  );
   const [showTooltip, setShowTooltip] = useState(false);
   const { toast } = useToast();
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Processing jobs persistence
+  // ─────────────────────────────────────────────────────────────────────────
 
   const getStoredProcessingJobs = (): Map<string, ProcessingJob> => {
     try {
@@ -37,27 +73,51 @@ const Documents = () => {
     }
   };
 
-  const fetchDocuments = async (showLoadingState = false) => {
+  // ─────────────────────────────────────────────────────────────────────────
+  // Fetch
+  // ─────────────────────────────────────────────────────────────────────────
+
+  const fetchAll = async (showLoadingState = false) => {
     if (showLoadingState) setLoading(true);
     try {
-      const docs = await apiService.getAllDocuments();
-      setDocuments(docs);
+      const [docs, sources] = await Promise.allSettled([
+        apiService.getAllDocuments(),
+        apiService.getTabularSources(),
+      ]);
 
-      const currentJobs = new Map(processingJobs);
-      let jobsUpdated = false;
-      for (const [jobId, job] of currentJobs.entries()) {
-        const matchingDoc = docs.find(doc => doc.pdf_name === job.pdf_name);
-        if (matchingDoc && (matchingDoc.status === 'Analyzed' || matchingDoc.status === 'Failed')) {
-          currentJobs.delete(jobId);
-          jobsUpdated = true;
+      if (docs.status === 'fulfilled') {
+        setDocuments(docs.value);
+
+        // Clean up processing jobs for completed docs
+        const currentJobs = new Map(processingJobs);
+        let jobsUpdated = false;
+        for (const [jobId, job] of currentJobs.entries()) {
+          const matchingDoc = docs.value.find(
+            (doc) => doc.pdf_name === job.pdf_name,
+          );
+          if (
+            matchingDoc &&
+            (matchingDoc.status === 'Analyzed' || matchingDoc.status === 'Failed')
+          ) {
+            currentJobs.delete(jobId);
+            jobsUpdated = true;
+          }
+        }
+        if (jobsUpdated) {
+          setProcessingJobs(currentJobs);
+          saveProcessingJobs(currentJobs);
         }
       }
-      if (jobsUpdated) {
-        setProcessingJobs(currentJobs);
-        saveProcessingJobs(currentJobs);
+
+      if (sources.status === 'fulfilled') {
+        setTabularSources(sources.value);
       }
     } catch (error) {
-      toast({ title: 'Error', description: 'Failed to fetch knowledge sources', variant: 'destructive' });
+      toast({
+        title: 'Error',
+        description: 'Failed to fetch knowledge sources',
+        variant: 'destructive',
+      });
     } finally {
       if (showLoadingState) setLoading(false);
     }
@@ -67,196 +127,306 @@ const Documents = () => {
     const storedJobs = getStoredProcessingJobs();
     setProcessingJobs(storedJobs);
     storedJobs.forEach((job, jobId) => {
-      if (job.status !== 'completed' && job.status !== 'failed') pollJobStatus(jobId);
+      if (job.status !== 'completed' && job.status !== 'failed') {
+        pollJobStatus(jobId);
+      }
     });
   }, []);
 
-  useEffect(() => { fetchDocuments(true); }, []);
+  useEffect(() => {
+    fetchAll(true);
+  }, []);
 
-  const deleteDocument = async (id: string) => {
+  // ─────────────────────────────────────────────────────────────────────────
+  // Delete (PDF/web/tabular)
+  // ─────────────────────────────────────────────────────────────────────────
+
+  const deleteRow = async (row: KnowledgeRow) => {
     try {
-      await apiService.deleteDocument(id);
-      await fetchDocuments(false);
+      if (row.kind === 'tabular') {
+        await apiService.deleteTabularSource(row.id);
+      } else {
+        await apiService.deleteDocument(row.id);
+      }
+      await fetchAll(false);
       toast({ title: 'Deleted', description: 'Knowledge source removed successfully' });
     } catch (error) {
       toast({ title: 'Error', description: 'Failed to delete', variant: 'destructive' });
     }
   };
 
-  // ── Upload handler — supports both PDF and web crawl ──────────────
-  const handleUpload = async (files: File[], websiteUrl?: string) => {
-    // Website crawl path
+  // ─────────────────────────────────────────────────────────────────────────
+  // Upload handler (PDF / Website / Spreadsheet)
+  // ─────────────────────────────────────────────────────────────────────────
+
+  const handleUpload = async (
+    files: File[],
+    websiteUrl?: string,
+    sheetFiles?: File[],
+  ) => {
+    // ── Spreadsheet path ────────────────────────────────────────────────
+    if (sheetFiles && sheetFiles.length > 0) {
+      for (const file of sheetFiles) {
+        try {
+          const response = await apiService.uploadTabular(file);
+          toast({
+            title: 'Spreadsheet uploaded',
+            description: `${response.filename} → ${response.total_tables} table${
+              response.total_tables !== 1 ? 's' : ''
+            } created`,
+          });
+        } catch (error) {
+          const msg = error instanceof Error ? error.message : 'Upload failed';
+          toast({
+            title: 'Spreadsheet upload failed',
+            description: `${file.name}: ${msg}`,
+            variant: 'destructive',
+          });
+        }
+      }
+      await fetchAll(false);
+      setShowUpload(false);
+      return;
+    }
+
+    // ── Website crawl path ──────────────────────────────────────────────
     if (websiteUrl) {
       try {
         const response = await apiService.crawlWebsite(websiteUrl);
-
         if (response.status === 'started') {
-          const newJobs = new Map(processingJobs.set(response.job_id, {
-            job_id:    response.job_id,
-            status:    'processing',
-            pdf_name:  response.site_slug,
-            file_name: websiteUrl,
-            stage:     'Starting crawl...',
-          }));
+          const newJobs = new Map(
+            processingJobs.set(response.job_id, {
+              job_id: response.job_id,
+              status: 'processing',
+              pdf_name: response.site_slug,
+              file_name: websiteUrl,
+              stage: 'Starting crawl...',
+            }),
+          );
           setProcessingJobs(newJobs);
           saveProcessingJobs(newJobs);
           pollJobStatus(response.job_id, true);
-
           toast({ title: 'Crawl started', description: `Crawling ${websiteUrl}…` });
         }
       } catch (error) {
-        toast({ title: 'Crawl failed', description: `Could not crawl ${websiteUrl}`, variant: 'destructive' });
+        toast({
+          title: 'Crawl failed',
+          description: `Could not crawl ${websiteUrl}`,
+          variant: 'destructive',
+        });
       }
       setShowUpload(false);
       return;
     }
 
-    // PDF upload path (unchanged)
+    // ── PDF path ────────────────────────────────────────────────────────
     for (const file of files) {
       try {
         const response = await apiService.uploadDocument(file);
         const chunkCount = response.chunks_processed || response.chunk_count || 0;
 
         if (response.status === 'already_exists') {
-          toast({ title: 'Already indexed', description: `"${response.pdf_name}" has ${chunkCount} chunks ready.` });
-          await fetchDocuments(false);
+          toast({
+            title: 'Already indexed',
+            description: `"${response.pdf_name}" has ${chunkCount} chunks ready.`,
+          });
+          await fetchAll(false);
         } else if (response.status === 'newly_processed') {
-          toast({ title: 'Upload complete', description: `"${response.pdf_name}" — ${chunkCount} chunks indexed.` });
-          await fetchDocuments(false);
+          toast({
+            title: 'Upload complete',
+            description: `"${response.pdf_name}" — ${chunkCount} chunks indexed.`,
+          });
+          await fetchAll(false);
         } else if (response.status === 'started') {
           const newJobs = new Map(processingJobs.set(response.job_id, response));
           setProcessingJobs(newJobs);
           saveProcessingJobs(newJobs);
           pollJobStatus(response.job_id);
-          toast({ title: 'Processing started', description: `Processing "${file.name}"…` });
+          toast({
+            title: 'Processing started',
+            description: `Processing "${file.name}"…`,
+          });
         } else {
-          toast({ title: 'Upload complete', description: response.message || `Uploaded ${file.name}` });
-          await fetchDocuments(false);
+          toast({
+            title: 'Upload complete',
+            description: response.message || `Uploaded ${file.name}`,
+          });
+          await fetchAll(false);
         }
       } catch (error) {
-        toast({ title: 'Upload failed', description: `Failed to upload ${file.name}`, variant: 'destructive' });
+        toast({
+          title: 'Upload failed',
+          description: `Failed to upload ${file.name}`,
+          variant: 'destructive',
+        });
       }
     }
     setShowUpload(false);
   };
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // Job polling (unchanged)
+  // ─────────────────────────────────────────────────────────────────────────
+
   const pollJobStatus = async (jobId: string, isWebCrawl = false) => {
     let pollCount = 0;
     const maxPolls = 300;
-    const pollFn = isWebCrawl ? apiService.getCrawlStatus.bind(apiService) : apiService.getJobStatus.bind(apiService);
+    const pollFn = isWebCrawl
+      ? apiService.getCrawlStatus.bind(apiService)
+      : apiService.getJobStatus.bind(apiService);
 
-    const pollInterval = setInterval(async () => {
+    const poll = async () => {
       pollCount++;
+      if (pollCount > maxPolls) return;
+
       try {
         const status = await pollFn(jobId);
-        const newJobs = new Map(processingJobs.set(jobId, status));
-        setProcessingJobs(newJobs);
-        saveProcessingJobs(newJobs);
 
-        if (status.status === 'completed' || status.status === 'failed' || pollCount >= maxPolls) {
-          clearInterval(pollInterval);
-          setProcessingJobs(prev => {
-            const updated = new Map(prev);
+        setProcessingJobs((prev) => {
+          const updated = new Map(prev);
+          if (status.status === 'completed' || status.status === 'failed') {
             updated.delete(jobId);
-            saveProcessingJobs(updated);
-            return updated;
-          });
-          await fetchDocuments(false);
-          if (pollCount < maxPolls) {
-            toast({
-              title: status.status === 'completed' ? 'Ready' : 'Failed',
-              description: status.message || status.error || `${status.pdf_name || 'Source'} ${status.status}`,
-              variant: status.status === 'completed' ? 'default' : 'destructive',
-            });
+            fetchAll(false);
+          } else {
+            updated.set(jobId, { ...status, job_id: jobId });
           }
+          saveProcessingJobs(updated);
+          return updated;
+        });
+
+        if (status.status !== 'completed' && status.status !== 'failed') {
+          setTimeout(poll, 2000);
         }
       } catch (error) {
-        if (pollCount >= maxPolls) clearInterval(pollInterval);
+        console.error('Poll error:', error);
       }
-    }, 2000);
+    };
+
+    poll();
   };
 
-  const getDocumentStatus = (doc: Document) => {
-    const activeJob = Array.from(processingJobs.values()).find(
-      job => job.pdf_name === doc.pdf_name || job.file_name === doc.name
-    );
-    if (activeJob && (activeJob.status === 'pending' || activeJob.status === 'processing')) {
-      return { status: 'Processing' as const, stage: activeJob.stage || 'Processing...' };
-    }
-    return { status: doc.status, stage: null };
+  // ─────────────────────────────────────────────────────────────────────────
+  // Build unified row list
+  // ─────────────────────────────────────────────────────────────────────────
+
+  const formatBytes = (n?: number) => {
+    if (!n || n === 0) return '—';
+    if (n < 1024) return `${n} B`;
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(2)} KB`;
+    return `${(n / (1024 * 1024)).toFixed(2)} MB`;
   };
+
+  const formatDate = (iso: string) => {
+    try {
+      return new Date(iso).toLocaleDateString('en-US', {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+      });
+    } catch {
+      return iso;
+    }
+  };
+
+  const rows: KnowledgeRow[] = [
+    // PDFs and web sources from /documents
+    ...documents.map<KnowledgeRow>((doc) => ({
+      kind: doc.source_type === 'web' ? 'web' : 'pdf',
+      id: doc.id,
+      name: doc.name,
+      date: doc.date,
+      size: doc.size,
+      status: doc.status,
+      chunkCount: doc.chunk_count,
+      blob_url: doc.blob_url,
+      source_url: doc.source_url,
+    })),
+    // Tabular sources from /tabular/sources
+    ...tabularSources.map<KnowledgeRow>((t) => ({
+      kind: 'tabular',
+      id: t.id,
+      name: t.original_filename,
+      sub_label: t.sheet_name || undefined,
+      date: formatDate(t.created_at),
+      size: `${t.row_count.toLocaleString()} rows`,
+      status:
+        t.status === 'completed'
+          ? 'Analyzed'
+          : t.status === 'partial'
+            ? 'Analyzed'
+            : t.status === 'failed'
+              ? 'Failed'
+              : 'Processing',
+      rowCount: t.row_count,
+    })),
+  ];
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Render helpers
+  // ─────────────────────────────────────────────────────────────────────────
 
   const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'Analyzed':   return 'bg-green-100 text-green-800';
-      case 'Processing': return 'bg-yellow-100 text-yellow-800';
-      case 'Failed':     return 'bg-red-100 text-red-800';
-      default:           return 'bg-gray-100 text-gray-800';
-    }
+    if (status === 'Analyzed') return 'bg-green-100 text-green-800';
+    if (status === 'Failed') return 'bg-red-100 text-red-800';
+    return 'bg-yellow-100 text-yellow-800';
   };
 
-  // Detect if a document is a web crawl by checking if name looks like a URL
-  // or if original_filename starts with http (from source_type field if available)
-  const isWebSource = (doc: Document) => {
-    const name = doc.name || '';
-    return (
-      (doc as any).source_type === 'web' ||
-      name.startsWith('http://') ||
-      name.startsWith('https://')
-    );
+  const KindIcon = ({ kind }: { kind: KnowledgeRow['kind'] }) => {
+    if (kind === 'pdf') return <FileText className="h-4 w-4 text-red-500" />;
+    if (kind === 'web') return <Globe className="h-4 w-4 text-blue-500" />;
+    return <FileSpreadsheet className="h-4 w-4 text-emerald-600" />;
   };
 
-  if (loading) {
-    return (
-      <Layout>
-        <div className="flex items-center justify-center h-64">
-          <RefreshCw className="animate-spin h-8 w-8" />
-          <span className="ml-2">Loading knowledge sources…</span>
-        </div>
-      </Layout>
-    );
-  }
+  const kindLabel = (kind: KnowledgeRow['kind']) =>
+    kind === 'pdf' ? 'PDF' : kind === 'web' ? 'Website' : 'Spreadsheet';
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Render
+  // ─────────────────────────────────────────────────────────────────────────
 
   return (
     <Layout>
-      <div className="container mx-auto py-8 px-4">
-
-        {/* ── Header ── */}
-        <div className="flex justify-between items-center mb-6">
-          <div className="flex items-center gap-3">
-            <h1 className="text-3xl font-bold">Knowledge Sources</h1>
-
-            {/* Tooltip */}
-            <div className="relative">
+      <div className="p-6">
+        <div className="flex items-center justify-between mb-6">
+          <div>
+            <h1 className="text-2xl font-semibold flex items-center gap-2">
+              Knowledge Sources
               <button
-                className="text-gray-400 hover:text-gray-600 transition-colors"
                 onMouseEnter={() => setShowTooltip(true)}
                 onMouseLeave={() => setShowTooltip(false)}
+                className="relative text-gray-400"
               >
-                <Info className="h-5 w-5" />
+                <Info className="h-4 w-4" />
+                {showTooltip && (
+                  <span className="absolute left-6 top-0 bg-black text-white text-xs px-2 py-1 rounded shadow-lg whitespace-nowrap z-10">
+                    PDFs · Websites · Spreadsheets
+                  </span>
+                )}
               </button>
-              {showTooltip && (
-                <div className="absolute left-7 top-0 z-10 w-64 rounded-lg border border-gray-200 bg-white p-3 shadow-lg text-sm text-gray-600">
-                  <p className="font-medium text-gray-900 mb-1">Supported sources</p>
-                  <div className="flex items-center gap-2 mb-1">
-                    <FileText className="h-4 w-4 text-gray-500 flex-shrink-0" />
-                    <span><span className="font-medium">PDF documents</span> — upload any PDF up to 50 MB</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Globe className="h-4 w-4 text-blue-500 flex-shrink-0" />
-                    <span><span className="font-medium">Websites</span> — crawl any public URL and all its sub-pages</span>
-                  </div>
-                </div>
-              )}
-            </div>
+            </h1>
+            <p className="text-sm text-gray-500 mt-1">
+              {rows.length} source{rows.length !== 1 ? 's' : ''} ·{' '}
+              {documents.filter((d) => d.source_type === 'pdf').length} PDFs,{' '}
+              {documents.filter((d) => d.source_type === 'web').length} websites,{' '}
+              {tabularSources.length} spreadsheets
+            </p>
           </div>
-
           <div className="flex gap-2">
-            <Button onClick={() => fetchDocuments(true)} variant="outline" size="sm" disabled={loading}>
-              <RefreshCw className={`h-4 w-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => fetchAll(true)}
+              disabled={loading}
+            >
+              <RefreshCw
+                className={`h-4 w-4 mr-2 ${loading ? 'animate-spin' : ''}`}
+              />
               Refresh
             </Button>
-            <Button onClick={() => setShowUpload(true)} className="bg-primary text-primary-foreground hover:bg-primary-800">
+            <Button
+              onClick={() => setShowUpload(true)}
+              className="bg-primary text-primary-foreground hover:bg-primary-800"
+            >
               <FileText className="h-4 w-4 mr-2" />
               Add Source
             </Button>
@@ -265,7 +435,10 @@ const Documents = () => {
 
         {/* ── Upload modal ── */}
         {showUpload && (
-          <DocumentUpload onUpload={handleUpload} onClose={() => setShowUpload(false)} />
+          <DocumentUpload
+            onUpload={handleUpload}
+            onClose={() => setShowUpload(false)}
+          />
         )}
 
         {/* ── In-progress jobs ── */}
@@ -273,138 +446,163 @@ const Documents = () => {
           <div className="mb-6">
             <h2 className="text-xl font-semibold mb-4">Currently Processing</h2>
             {Array.from(processingJobs.values()).map((job) => (
-              <div key={job.job_id} className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
+              <div
+                key={job.job_id}
+                className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4"
+              >
                 <div className="flex items-center justify-between mb-2">
                   <div className="flex items-center gap-2">
-                    {(job.file_name || '').startsWith('http')
-                      ? <Globe className="h-4 w-4 text-blue-500" />
-                      : <FileText className="h-4 w-4 text-gray-500" />
-                    }
-                    <span className="font-medium text-sm">{job.file_name || job.pdf_name || 'Processing…'}</span>
+                    {(job.file_name || '').startsWith('http') ? (
+                      <Globe className="h-4 w-4 text-blue-500" />
+                    ) : (
+                      <FileText className="h-4 w-4 text-gray-500" />
+                    )}
+                    <span className="font-medium text-sm">
+                      {job.file_name || job.pdf_name || 'Processing…'}
+                    </span>
                   </div>
-                  <span className="text-xs text-gray-500">{job.stage || 'Processing…'}</span>
+                  <span className="text-xs text-gray-500">
+                    {job.stage || 'Processing…'}
+                  </span>
                 </div>
                 <Progress
                   value={
-                    job.status === 'processing' ? 50 :
-                    job.status === 'pending'    ? 10 :
-                    job.status === 'completed'  ? 100 : 25
+                    job.status === 'processing'
+                      ? 50
+                      : job.status === 'pending'
+                        ? 10
+                        : job.status === 'completed'
+                          ? 100
+                          : 0
                   }
-                  className="w-full"
                 />
-                {job.elapsed_time && (
-                  <p className="text-xs text-gray-400 mt-1">Elapsed: {Math.round(job.elapsed_time)}s</p>
-                )}
               </div>
             ))}
           </div>
         )}
 
-        {/* ── Table ── */}
+        {/* ── Unified sources table ── */}
         <div className="bg-white rounded-lg shadow overflow-hidden">
-          <table className="w-full">
+          <table className="min-w-full divide-y divide-gray-200">
             <thead className="bg-gray-50">
               <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Name</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Type</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Size</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
-                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Source
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Type
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Date
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Size
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Status
+                </th>
+                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Actions
+                </th>
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
-              {documents.map((doc) => {
-                const { status, stage } = getDocumentStatus(doc);
-                const webSource = isWebSource(doc);
-                return (
-                  <tr key={doc.id}>
-                    {/* Name */}
-                    <td className="px-6 py-4">
-                      <div className="flex items-center gap-3">
-                        {webSource
-                          ? <Globe className="h-5 w-5 text-blue-500 flex-shrink-0" />
-                          : <FileText className="h-5 w-5 text-gray-400 flex-shrink-0" />
-                        }
-                        <div className="min-w-0">
-                          <p className="text-sm font-medium text-gray-900 truncate max-w-xs">
-                            {doc.name}
+              {rows.map((row) => (
+                <tr key={`${row.kind}-${row.id}`} className="hover:bg-gray-50">
+                  {/* Source */}
+                  <td className="px-6 py-4 whitespace-nowrap">
+                    <div className="flex items-center gap-2">
+                      <KindIcon kind={row.kind} />
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-gray-900 truncate max-w-[320px]">
+                          {row.name}
+                        </p>
+                        {row.sub_label && (
+                          <p className="text-xs text-gray-500">
+                            Sheet: {row.sub_label}
                           </p>
-                          {webSource && (
-                            <p className="text-xs text-gray-400 truncate max-w-xs">
-                              {(doc as any).source_url || doc.name}
-                            </p>
-                          )}
-                        </div>
-                      </div>
-                    </td>
-
-                    {/* Type badge */}
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      {webSource ? (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700">
-                          <Globe className="h-3 w-3" /> Website
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600">
-                          <FileText className="h-3 w-3" /> PDF
-                        </span>
-                      )}
-                    </td>
-
-                    {/* Date */}
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{doc.date}</td>
-
-                    {/* Size — hide "0 B" for web sources */}
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {webSource ? '—' : doc.size}
-                    </td>
-
-                    {/* Status */}
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${getStatusColor(status)}`}>
-                        {status}
-                      </span>
-                      {stage && <p className="text-xs text-gray-500 mt-1">{stage}</p>}
-                      {doc.chunk_count && status === 'Analyzed' && (
-                        <p className="text-xs text-gray-500 mt-1">{doc.chunk_count} chunks</p>
-                      )}
-                    </td>
-
-                    {/* Actions */}
-                    <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                      <div className="flex items-center justify-end gap-2">
-                        {doc.blob_url && status === 'Analyzed' && !webSource && (
-                          <Button variant="ghost" size="sm" onClick={() => window.open(doc.blob_url, '_blank')}>
-                            <Eye className="h-4 w-4" />
-                          </Button>
                         )}
+                      </div>
+                    </div>
+                  </td>
+
+                  {/* Type */}
+                  <td className="px-6 py-4 whitespace-nowrap">
+                    <span className="inline-flex items-center px-2 py-0.5 rounded text-xs bg-gray-100 text-gray-700">
+                      {kindLabel(row.kind)}
+                    </span>
+                  </td>
+
+                  {/* Date */}
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                    {row.date}
+                  </td>
+
+                  {/* Size */}
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                    {row.size}
+                  </td>
+
+                  {/* Status */}
+                  <td className="px-6 py-4 whitespace-nowrap">
+                    <span
+                      className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${getStatusColor(
+                        row.status,
+                      )}`}
+                    >
+                      {row.status}
+                    </span>
+                    {row.chunkCount && row.status === 'Analyzed' && (
+                      <p className="text-xs text-gray-500 mt-1">
+                        {row.chunkCount} chunks
+                      </p>
+                    )}
+                  </td>
+
+                  {/* Actions */}
+                  <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                    <div className="flex items-center justify-end gap-2">
+                      {row.blob_url && row.status === 'Analyzed' && row.kind === 'pdf' && (
                         <Button
                           variant="ghost"
                           size="sm"
-                          onClick={() => deleteDocument(doc.id)}
-                          className="text-red-600 hover:text-red-800"
-                          disabled={status === 'Processing'}
+                          onClick={() => window.open(row.blob_url, '_blank')}
                         >
-                          <Trash2 className="h-4 w-4" />
+                          <Eye className="h-4 w-4" />
                         </Button>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
+                      )}
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => deleteRow(row)}
+                        className="text-red-600 hover:text-red-800"
+                        disabled={row.status === 'Processing'}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
             </tbody>
           </table>
 
-          {documents.length === 0 && processingJobs.size === 0 && (
+          {rows.length === 0 && processingJobs.size === 0 && (
             <div className="text-center py-12">
               <div className="flex justify-center gap-3 mb-3">
                 <FileText className="h-8 w-8 text-gray-300" />
                 <Globe className="h-8 w-8 text-gray-300" />
+                <FileSpreadsheet className="h-8 w-8 text-gray-300" />
               </div>
-              <h3 className="text-sm font-medium text-gray-900">No knowledge sources yet</h3>
-              <p className="mt-1 text-sm text-gray-500">Upload a PDF or crawl a website to get started.</p>
-              <Button className="mt-4" onClick={() => setShowUpload(true)}>Add your first source</Button>
+              <h3 className="text-sm font-medium text-gray-900">
+                No knowledge sources yet
+              </h3>
+              <p className="mt-1 text-sm text-gray-500">
+                Upload a PDF, crawl a website, or add a spreadsheet to get started.
+              </p>
+              <Button className="mt-4" onClick={() => setShowUpload(true)}>
+                Add your first source
+              </Button>
             </div>
           )}
         </div>
