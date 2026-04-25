@@ -35,6 +35,7 @@ import {
 } from '@/components/ui/alert-dialog';
 import RoutingBadge from '@/components/RoutingBadge';
 import SqlResultTable from '@/components/SqlResultTable';
+import ChartExportCard from '@/components/ChartExportCard';
 
 interface Message {
   id: string;
@@ -50,6 +51,8 @@ interface Message {
   routing?: RoutingDecision;
   sql_used?: string | null;
   sql_rows?: Array<Record<string, unknown>>;
+  /** The user's question that produced this AI answer — used for chart export header. */
+  question?: string;
 }
 
 const WELCOME_MESSAGE: Message = {
@@ -208,9 +211,13 @@ const Chat = () => {
   const handleSendMessage = async () => {
     if (!inputValue.trim()) return;
 
+    // Capture the question text BEFORE we clear the input — needed both for
+    // the user message and (later) for the AI message's chart export header.
+    const submittedQuestion = inputValue.trim();
+
     const userMessage: Message = {
       id: Date.now().toString(),
-      content: inputValue,
+      content: submittedQuestion,
       sender: 'user',
       timestamp: new Date(),
     };
@@ -221,7 +228,7 @@ const Chat = () => {
 
     try {
       const response: ChatResponse = await apiService.queryDocument(
-        inputValue,
+        submittedQuestion,
         activeDocument || undefined,
         currentConversationId || undefined,
       );
@@ -235,6 +242,7 @@ const Chat = () => {
         routing: response.routing,
         sql_used: response.sql_used,
         sql_rows: response.sql_rows,
+        question: submittedQuestion,
       };
 
       setMessages((prev) => [...prev, aiMessage]);
@@ -329,14 +337,24 @@ const Chat = () => {
                       </ReactMarkdown>
                     </div>
 
-                    {/* SQL results table (if present and not empty) */}
+                    {/* SQL results — chart-first, then collapsible table */}
                     {message.sender === 'ai' &&
                       message.sql_rows &&
                       message.sql_rows.length > 0 && (
-                        <SqlResultTable
-                          rows={message.sql_rows}
-                          sqlUsed={message.sql_used}
-                        />
+                        <>
+                          <ChartExportCard
+                            question={message.question || 'SQL Result'}
+                            rows={message.sql_rows}
+                            sourceLabel={
+                              message.sources?.find((s) => s.type === 'sql')?.table
+                            }
+                            timestamp={message.timestamp}
+                          />
+                          <SqlResultTable
+                            rows={message.sql_rows}
+                            sqlUsed={message.sql_used}
+                          />
+                        </>
                       )}
 
                     {/* Sources (vector + sql combined) */}
